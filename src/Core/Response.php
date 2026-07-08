@@ -20,7 +20,7 @@ final class Response
         }
 
         header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-        header('Access-Control-Allow-Headers: Content-Type, X-Admin-Token');
+        header('Access-Control-Allow-Headers: Content-Type, Authorization');
         header('Access-Control-Max-Age: 86400');
     }
 

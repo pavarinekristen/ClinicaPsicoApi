@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Controllers\AdminController;
+use App\Controllers\AuthController;
 use App\Controllers\AvailabilityController;
 use App\Controllers\HealthController;
 use App\Controllers\ReservationController;
@@ -13,8 +14,10 @@ use App\Core\Env;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Router;
+use App\Repositories\AuditRepository;
 use App\Repositories\RoomRepository;
 use App\Repositories\SlotRepository;
+use App\Services\AuthService;
 use App\Services\AvailabilityService;
 use App\Services\ReservationService;
 
@@ -37,6 +40,7 @@ $router->get('/rooms', static fn (Request $request) => roomController()->index($
 $router->get('/availability', static fn (Request $request) => availabilityController()->index($request));
 $router->post('/reservations/lock', static fn (Request $request) => reservationController()->lock($request));
 $router->post('/reservations/confirm', static fn (Request $request) => reservationController()->confirm($request));
+$router->post('/admin/login', static fn (Request $request) => authController()->login($request));
 $router->get('/admin/reservations', static fn (Request $request) => adminController()->listReservations($request));
 $router->get('/admin/reservations/day', static fn (Request $request) => adminController()->reservationsByDay($request));
 $router->post('/admin/slots/generate', static fn (Request $request) => adminController()->generateSlots($request));
@@ -120,13 +124,46 @@ function reservationController(): ReservationController
     return $controller;
 }
 
+function authService(): AuthService
+{
+    static $service = null;
+
+    if ($service === null) {
+        $service = new AuthService();
+    }
+
+    return $service;
+}
+
+function auditRepository(): AuditRepository
+{
+    static $repository = null;
+
+    if ($repository === null) {
+        $repository = new AuditRepository(Database::connect());
+    }
+
+    return $repository;
+}
+
+function authController(): AuthController
+{
+    static $controller = null;
+
+    if ($controller === null) {
+        $controller = new AuthController(authService(), auditRepository());
+    }
+
+    return $controller;
+}
+
 function adminController(): AdminController
 {
     static $controller = null;
 
     if ($controller === null) {
         $service = new ReservationService(slotRepository(), (int) Env::get('LOCK_TTL_MINUTES', '10'));
-        $controller = new AdminController($service);
+        $controller = new AdminController($service, authService(), auditRepository());
     }
 
     return $controller;
