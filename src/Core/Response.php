@@ -8,12 +8,13 @@ final class Response
 {
     public static function applyCors(Request $request): void
     {
-        $allowed = array_map('trim', explode(',', Env::get('CORS_ALLOWED_ORIGINS', '*') ?? '*'));
+        // Fail-closed: sem CORS_ALLOWED_ORIGINS configurado, nenhuma origem cross-site e liberada.
+        // Nunca emite "*" — apenas reflete origens que estao explicitamente na allowlist.
+        $configured = Env::get('CORS_ALLOWED_ORIGINS', '') ?? '';
+        $allowed = array_filter(array_map('trim', explode(',', $configured)));
         $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
-        if (in_array('*', $allowed, true)) {
-            header('Access-Control-Allow-Origin: *');
-        } elseif ($origin !== '' && in_array($origin, $allowed, true)) {
+        if ($origin !== '' && in_array($origin, $allowed, true)) {
             header("Access-Control-Allow-Origin: {$origin}");
             header('Vary: Origin');
         }

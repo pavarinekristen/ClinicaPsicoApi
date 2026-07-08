@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Core\AppException;
 use App\Core\Env;
+use App\Core\RateLimiter;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Validator;
@@ -13,6 +14,9 @@ use App\Services\ReservationService;
 
 final class AdminController
 {
+    private const MAX_AUTH_ATTEMPTS = 10;
+    private const AUTH_WINDOW_SECONDS = 900; // 15 minutos
+
     public function __construct(private readonly ReservationService $reservations)
     {
     }
@@ -125,12 +129,24 @@ final class AdminController
 
     private function authorize(Request $request): void
     {
+        $limiter = new RateLimiter(dirname(__DIR__, 2) . '/storage/cache/ratelimit');
+        $ip = $request->ip();
+        $key = 'admin-auth:' . ($ip !== '' ? $ip : 'unknown');
+
+        // Lockout por IP: bloqueia brute force online mesmo com token forte.
+        if ($limiter->tooManyAttempts($key, self::MAX_AUTH_ATTEMPTS, self::AUTH_WINDOW_SECONDS)) {
+            throw new AppException('Muitas tentativas de acesso. Aguarde alguns minutos e tente de novo.', 429);
+        }
+
         $actual = $request->header('x-admin-token');
 
         if ($actual === null || $actual === '' || !$this->tokenIsValid($actual)) {
+            $limiter->hit($key, self::AUTH_WINDOW_SECONDS);
             usleep(350000); // desacelera forca bruta no token
             throw new AppException('Nao autorizado.', 401);
         }
+
+        $limiter->clear($key); // sucesso zera o contador
     }
 
     private function tokenIsValid(string $actual): bool

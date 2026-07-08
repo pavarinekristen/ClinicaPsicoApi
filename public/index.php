@@ -52,11 +52,26 @@ try {
 } catch (AppException $exception) {
     Response::error($exception->getMessage(), $exception->statusCode(), $exception->details());
 } catch (Throwable $exception) {
-    $debug = Env::get('APP_DEBUG', 'false') === 'true';
+    // Trace completo sempre vai para o log local (fora do webroot), nunca para o cliente...
+    @error_log(
+        sprintf(
+            "[%s] %s in %s:%d\n%s\n",
+            gmdate('c'),
+            $exception->getMessage(),
+            $exception->getFile(),
+            $exception->getLine(),
+            $exception->getTraceAsString()
+        ),
+        3,
+        dirname(__DIR__) . '/storage/logs/app-errors.log'
+    );
+
+    // ...e detalhes so aparecem na resposta em ambiente local explicito.
+    $isLocalDebug = Env::get('APP_ENV', 'production') === 'local' && Env::get('APP_DEBUG', 'false') === 'true';
     Response::error(
         'Erro interno da API.',
         500,
-        $debug ? ['exception' => $exception->getMessage(), 'trace' => $exception->getTraceAsString()] : []
+        $isLocalDebug ? ['exception' => $exception->getMessage(), 'trace' => $exception->getTraceAsString()] : []
     );
 }
 
