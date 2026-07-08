@@ -14,6 +14,9 @@ storage/logs/*
 !storage/logs/.gitkeep
 *.log
 
+# === Cache/estado local (rate limiter) ===
+storage/cache/
+
 # === Config local de ferramentas ===
 .claude/
 .codex-tmp/

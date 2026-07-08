@@ -1,13 +1,19 @@
 Options -Indexes
 
+# Nega acesso a qualquer dotfile/dotdir (.env, .git, .mysql-data, .htaccess...)
 <FilesMatch "^\.">
   Require all denied
 </FilesMatch>
 
 RewriteEngine On
 
-# Bloqueia acesso direto a codigo-fonte, migracoes, logs e ferramentas
-RewriteRule ^(src|database|storage|tools|docs)(/|$) - [F,L]
+# Forca HTTPS em producao (nao afeta o servidor embutido de dev).
+RewriteCond %{HTTPS} off
+RewriteCond %{HTTP:X-Forwarded-Proto} !https
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Bloqueia acesso direto a codigo-fonte, dados, logs e ferramentas.
+RewriteRule ^(src|config|database|storage|tools|docs|\.mysql-data|\.git)(/|$) - [F,L]
 
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
@@ -17,4 +23,6 @@ RewriteRule ^ public/index.php [QSA,L]
   Header set X-Content-Type-Options "nosniff"
   Header set X-Frame-Options "DENY"
   Header set Referrer-Policy "no-referrer"
+  Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
 </IfModule>
