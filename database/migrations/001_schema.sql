@@ -1,0 +1,62 @@
+CREATE TABLE IF NOT EXISTS salas (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  public_id VARCHAR(36) NOT NULL,
+  numero VARCHAR(20) NOT NULL,
+  nome VARCHAR(120) NOT NULL,
+  categoria VARCHAR(120) NULL,
+  ativa TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_salas_public_id (public_id),
+  KEY idx_salas_ativa (ativa)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agenda_slots (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  public_id VARCHAR(36) NOT NULL,
+  sala_id BIGINT UNSIGNED NOT NULL,
+  slot_inicio DATETIME NOT NULL,
+  slot_fim DATETIME NOT NULL,
+  status ENUM('livre', 'lock_temporario', 'confirmada', 'bloqueada_admin') NOT NULL DEFAULT 'livre',
+  lock_token CHAR(64) NULL,
+  locked_until DATETIME NULL,
+  confirmed_at DATETIME NULL,
+  cliente_nome VARCHAR(160) NULL,
+  cliente_whatsapp VARCHAR(32) NULL,
+  plano VARCHAR(80) NULL,
+  bloqueio_motivo VARCHAR(255) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_agenda_slots_public_id (public_id),
+  UNIQUE KEY uq_agenda_slots_sala_inicio (sala_id, slot_inicio),
+  KEY idx_agenda_slots_day (sala_id, slot_inicio, status),
+  KEY idx_agenda_slots_locks (status, locked_until),
+  CONSTRAINT fk_agenda_slots_sala FOREIGN KEY (sala_id) REFERENCES salas(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS reservas (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  public_id VARCHAR(36) NOT NULL,
+  slot_id BIGINT UNSIGNED NOT NULL,
+  sala_id BIGINT UNSIGNED NOT NULL,
+  cliente_nome VARCHAR(160) NULL,
+  cliente_whatsapp VARCHAR(32) NULL,
+  plano VARCHAR(80) NOT NULL,
+  status ENUM('lock_temporario', 'confirmada', 'cancelada', 'expirada') NOT NULL DEFAULT 'lock_temporario',
+  lock_token CHAR(64) NOT NULL,
+  locked_until DATETIME NULL,
+  confirmed_at DATETIME NULL,
+  cancelled_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_reservas_public_id (public_id),
+  UNIQUE KEY uq_reservas_lock_token (lock_token),
+  KEY idx_reservas_slot_status (slot_id, status),
+  KEY idx_reservas_sala_status (sala_id, status, created_at),
+  KEY idx_reservas_locks (status, locked_until),
+  CONSTRAINT fk_reservas_slot FOREIGN KEY (slot_id) REFERENCES agenda_slots(id),
+  CONSTRAINT fk_reservas_sala FOREIGN KEY (sala_id) REFERENCES salas(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

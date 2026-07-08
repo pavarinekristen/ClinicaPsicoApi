@@ -1,0 +1,27 @@
+# === Segredos: NUNCA versionar ===
+.env
+.env.*
+!.env.example
+
+# === Banco de dados local (dados reais de pacientes / PII) ===
+.mysql-data/
+
+# === Runtime PHP portatil (dev local, ~97MB) ===
+tools/
+
+# === Logs ===
+storage/logs/*
+!storage/logs/.gitkeep
+*.log
+
+# === Config local de ferramentas ===
+.claude/
+.codex-tmp/
+.agents/
+
+# === SO / Editor ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,20 @@
+Options -Indexes
+
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+RewriteEngine On
+
+# Bloqueia acesso direto a codigo-fonte, migracoes, logs e ferramentas
+RewriteRule ^(src|database|storage|tools|docs)(/|$) - [F,L]
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ public/index.php [QSA,L]
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "DENY"
+  Header set Referrer-Policy "no-referrer"
+</IfModule>
