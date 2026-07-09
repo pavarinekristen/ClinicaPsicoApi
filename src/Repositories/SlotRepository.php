@@ -123,7 +123,7 @@ final class SlotRepository
             $lookup->execute($idParams);
             $slots = $lookup->fetchAll();
 
-            if (count($slots) !== count($slotPublicIds) || !$this->slotsFormValidBlock($slots)) {
+            if (count($slots) !== count($slotPublicIds) || !$this->slotsFormValidPackage($slots)) {
                 $this->pdo->rollBack();
                 return [];
             }
@@ -480,6 +480,15 @@ final class SlotRepository
             );
             $reservationStmt->execute(['id' => $reservation['id']]);
 
+            $reservationSlotsStmt = $this->pdo->prepare(
+                "UPDATE reserva_slots
+                 SET status = 'cancelada',
+                     cancelled_at = UTC_TIMESTAMP()
+                 WHERE reserva_id = :reserva_id
+                   AND status = 'ativa'"
+            );
+            $reservationSlotsStmt->execute(['reserva_id' => $reservation['id']]);
+
             $slotStmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
                  SET status = 'livre',
@@ -494,6 +503,98 @@ final class SlotRepository
                    AND status IN ('lock_temporario', 'confirmada')"
             );
             $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
+
+            $this->pdo->commit();
+
+            return true;
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
+    }
+
+    /**
+     * Cancela apenas um horario dentro de um pacote mensal.
+     */
+    public function adminCancelReservationSlot(string $reservaPublicId, string $slotPublicId): bool
+    {
+        $this->cleanupExpiredLocks();
+        $this->pdo->beginTransaction();
+
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT r.id AS reserva_id,
+                        r.status AS reserva_status,
+                        rs.id AS reserva_slot_id,
+                        s.id AS slot_id
+                 FROM reservas r
+                 INNER JOIN reserva_slots rs ON rs.reserva_id = r.id
+                 INNER JOIN agenda_slots s ON s.id = rs.slot_id
+                 WHERE r.public_id = :reserva_public_id
+                   AND s.public_id = :slot_public_id
+                   AND rs.status = 'ativa'
+                 LIMIT 1
+                 FOR UPDATE"
+            );
+            $stmt->execute([
+                'reserva_public_id' => $reservaPublicId,
+                'slot_public_id' => $slotPublicId,
+            ]);
+            $item = $stmt->fetch();
+
+            if (!$item || !in_array($item['reserva_status'], ['lock_temporario', 'confirmada'], true)) {
+                $this->pdo->rollBack();
+                return false;
+            }
+
+            $reservationSlotStmt = $this->pdo->prepare(
+                "UPDATE reserva_slots
+                 SET status = 'cancelada',
+                     cancelled_at = UTC_TIMESTAMP()
+                 WHERE id = :id"
+            );
+            $reservationSlotStmt->execute(['id' => $item['reserva_slot_id']]);
+
+            $slotStmt = $this->pdo->prepare(
+                "UPDATE agenda_slots
+                 SET status = 'livre',
+                     lock_token = NULL,
+                     locked_until = NULL,
+                     confirmed_at = NULL,
+                     cliente_nome = NULL,
+                     cliente_whatsapp = NULL,
+                     plano = NULL,
+                     updated_at = UTC_TIMESTAMP()
+                 WHERE id = :slot_id
+                   AND status IN ('lock_temporario', 'confirmada')"
+            );
+            $slotStmt->execute(['slot_id' => $item['slot_id']]);
+
+            $countStmt = $this->pdo->prepare(
+                "SELECT COUNT(*) AS active_slots
+                 FROM reserva_slots
+                 WHERE reserva_id = :reserva_id
+                   AND status = 'ativa'"
+            );
+            $countStmt->execute(['reserva_id' => $item['reserva_id']]);
+            $activeSlots = (int) ($countStmt->fetch()['active_slots'] ?? 0);
+
+            if ($activeSlots === 0) {
+                $reservationStmt = $this->pdo->prepare(
+                    "UPDATE reservas
+                     SET status = 'cancelada',
+                         cancelled_at = UTC_TIMESTAMP(),
+                         locked_until = NULL,
+                         updated_at = UTC_TIMESTAMP()
+                     WHERE id = :id"
+                );
+                $reservationStmt->execute(['id' => $item['reserva_id']]);
+            } else {
+                $reservationStmt = $this->pdo->prepare(
+                    'UPDATE reservas SET updated_at = UTC_TIMESTAMP() WHERE id = :id'
+                );
+                $reservationStmt->execute(['id' => $item['reserva_id']]);
+            }
 
             $this->pdo->commit();
 
@@ -576,6 +677,7 @@ final class SlotRepository
                     MIN(s.slot_inicio) AS slot_inicio,
                     MAX(s.slot_fim) AS slot_fim,
                     COUNT(*) AS duration_slots,
+                    GROUP_CONCAT(CONCAT(s.public_id, '|', s.slot_inicio, '|', s.slot_fim, '|', rs.status) ORDER BY s.slot_inicio SEPARATOR '||') AS slot_items_raw,
                     sa.numero AS sala_numero,
                     sa.nome AS sala_nome
              FROM reservas r
@@ -583,12 +685,13 @@ final class SlotRepository
              INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) = :date
+               AND rs.status = 'ativa'
              GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.created_at, sa.numero, sa.nome
              ORDER BY slot_inicio, sa.numero"
         );
         $stmt->execute(['date' => $date]);
 
-        return $stmt->fetchAll();
+        return $this->hydrateReservationRows($stmt->fetchAll());
     }
 
     /** @return array{pending: array<int, array<string, mixed>>, recent: array<int, array<string, mixed>>} */
@@ -605,10 +708,11 @@ final class SlotRepository
                     r.confirm_code,
                     r.locked_until,
                     TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), r.locked_until) AS seconds_to_expire,
-                    SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
-                    MIN(s.slot_inicio) AS slot_inicio,
-                    MAX(s.slot_fim) AS slot_fim,
-                    COUNT(*) AS duration_slots,
+                    SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN rs.status = 'ativa' THEN s.public_id END ORDER BY s.slot_inicio), ',', 1) AS slot_id,
+                    COALESCE(MIN(CASE WHEN rs.status = 'ativa' THEN s.slot_inicio END), MIN(s.slot_inicio)) AS slot_inicio,
+                    COALESCE(MAX(CASE WHEN rs.status = 'ativa' THEN s.slot_fim END), MAX(s.slot_fim)) AS slot_fim,
+                    SUM(CASE WHEN rs.status = 'ativa' THEN 1 ELSE 0 END) AS duration_slots,
+                    GROUP_CONCAT(CONCAT(s.public_id, '|', s.slot_inicio, '|', s.slot_fim, '|', rs.status) ORDER BY s.slot_inicio SEPARATOR '||') AS slot_items_raw,
                     sa.numero AS sala_numero,
                     sa.nome AS sala_nome
              FROM reservas r
@@ -628,10 +732,11 @@ final class SlotRepository
                     r.plano,
                     r.status,
                     r.confirmed_at,
-                    SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
-                    MIN(s.slot_inicio) AS slot_inicio,
-                    MAX(s.slot_fim) AS slot_fim,
-                    COUNT(*) AS duration_slots,
+                    SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN rs.status = 'ativa' THEN s.public_id END ORDER BY s.slot_inicio), ',', 1) AS slot_id,
+                    COALESCE(MIN(CASE WHEN rs.status = 'ativa' THEN s.slot_inicio END), MIN(s.slot_inicio)) AS slot_inicio,
+                    COALESCE(MAX(CASE WHEN rs.status = 'ativa' THEN s.slot_fim END), MAX(s.slot_fim)) AS slot_fim,
+                    SUM(CASE WHEN rs.status = 'ativa' THEN 1 ELSE 0 END) AS duration_slots,
+                    GROUP_CONCAT(CONCAT(s.public_id, '|', s.slot_inicio, '|', s.slot_fim, '|', rs.status) ORDER BY s.slot_inicio SEPARATOR '||') AS slot_items_raw,
                     sa.numero AS sala_numero,
                     sa.nome AS sala_nome
              FROM reservas r
@@ -645,8 +750,8 @@ final class SlotRepository
         );
 
         return [
-            'pending' => $pendingStmt->fetchAll(),
-            'recent' => $recentStmt->fetchAll(),
+            'pending' => $this->hydrateReservationRows($pendingStmt->fetchAll()),
+            'recent' => $this->hydrateReservationRows($recentStmt->fetchAll()),
         ];
     }
 
@@ -703,14 +808,14 @@ final class SlotRepository
     }
 
     /** @param array<int, array<string, mixed>> $slots */
-    private function slotsFormValidBlock(array $slots): bool
+    private function slotsFormValidPackage(array $slots): bool
     {
         if ($slots === []) {
             return false;
         }
 
         $roomId = (int) $slots[0]['sala_id'];
-        $localDate = $this->localDate((string) $slots[0]['slot_inicio']);
+        $localMonth = $this->localMonth((string) $slots[0]['slot_inicio']);
 
         foreach ($slots as $slot) {
             if ((int) $slot['sala_id'] !== $roomId) {
@@ -721,7 +826,7 @@ final class SlotRepository
                 return false;
             }
 
-            if ($this->localDate((string) $slot['slot_inicio']) !== $localDate) {
+            if ($this->localMonth((string) $slot['slot_inicio']) !== $localMonth) {
                 return false;
             }
         }
@@ -729,11 +834,49 @@ final class SlotRepository
         return true;
     }
 
-    private function localDate(string $utcDateTime): string
+    private function localMonth(string $utcDateTime): string
     {
         return (new \DateTimeImmutable($utcDateTime, new \DateTimeZone('UTC')))
             ->setTimezone(new \DateTimeZone('America/Sao_Paulo'))
-            ->format('Y-m-d');
+            ->format('Y-m');
+    }
+
+    /** @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function hydrateReservationRows(array $rows): array
+    {
+        return array_map(function (array $row): array {
+            $row['slot_items'] = $this->parseSlotItems((string) ($row['slot_items_raw'] ?? ''));
+            unset($row['slot_items_raw']);
+
+            return $row;
+        }, $rows);
+    }
+
+    /** @return array<int, array{slot_id: string, slot_inicio: string, slot_fim: string, status: string}> */
+    private function parseSlotItems(string $raw): array
+    {
+        if ($raw === '') {
+            return [];
+        }
+
+        $items = [];
+        foreach (explode('||', $raw) as $item) {
+            [$slotId, $start, $end, $status] = array_pad(explode('|', $item), 4, '');
+            if ($slotId === '' || $start === '' || $end === '') {
+                continue;
+            }
+
+            $items[] = [
+                'slot_id' => $slotId,
+                'slot_inicio' => $start,
+                'slot_fim' => $end,
+                'status' => $status !== '' ? $status : 'ativa',
+            ];
+        }
+
+        return $items;
     }
 
     /** @return array<string, mixed>|null */
@@ -803,10 +946,11 @@ final class SlotRepository
                        r.confirmed_at,
                        r.cancelled_at,
                        r.created_at,
-                       SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
-                       MIN(s.slot_inicio) AS slot_inicio,
-                       MAX(s.slot_fim) AS slot_fim,
-                       COUNT(*) AS duration_slots,
+                       SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN rs.status = 'ativa' THEN s.public_id END ORDER BY s.slot_inicio), ',', 1) AS slot_id,
+                       COALESCE(MIN(CASE WHEN rs.status = 'ativa' THEN s.slot_inicio END), MIN(s.slot_inicio)) AS slot_inicio,
+                       COALESCE(MAX(CASE WHEN rs.status = 'ativa' THEN s.slot_fim END), MAX(s.slot_fim)) AS slot_fim,
+                       SUM(CASE WHEN rs.status = 'ativa' THEN 1 ELSE 0 END) AS duration_slots,
+                       GROUP_CONCAT(CONCAT(s.public_id, '|', s.slot_inicio, '|', s.slot_fim, '|', rs.status) ORDER BY s.slot_inicio SEPARATOR '||') AS slot_items_raw,
                        sa.numero AS sala_numero,
                        sa.nome AS sala_nome
                 FROM reservas r
@@ -826,7 +970,7 @@ final class SlotRepository
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
 
-        return $stmt->fetchAll();
+        return $this->hydrateReservationRows($stmt->fetchAll());
     }
 
     /**

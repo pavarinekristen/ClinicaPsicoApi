@@ -134,6 +134,18 @@ final class AdminController
         Response::ok(['cancelled' => true]);
     }
 
+    public function cancelReservationSlot(Request $request): never
+    {
+        $user = $this->authorize($request);
+
+        $reservaId = Validator::requiredString($request->input('reserva_id'), 'reserva_id', 36);
+        $slotId = Validator::requiredString($request->input('slot_id'), 'slot_id', 36);
+
+        $this->reservations->adminCancelSlot($reservaId, $slotId);
+        $this->audit->record($user, 'reserva_horario_cancelado', 'reserva', $reservaId, ['slot_id' => $slotId], $request->ip());
+        Response::ok(['cancelled' => true]);
+    }
+
     public function updateReservation(Request $request): never
     {
         $user = $this->authorize($request);

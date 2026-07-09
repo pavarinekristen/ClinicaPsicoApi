@@ -91,6 +91,13 @@ final class ReservationService
         }
     }
 
+    public function adminCancelSlot(string $reservaId, string $slotId): void
+    {
+        if (!$this->slots->adminCancelReservationSlot($reservaId, $slotId)) {
+            throw new AppException('Horario nao encontrado ou ja cancelado.', 409);
+        }
+    }
+
     public function adminUpdate(string $reservaId, ?string $name, ?string $whatsapp, ?string $plan): void
     {
         if ($name === null && $whatsapp === null && $plan === null) {
