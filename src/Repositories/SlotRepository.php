@@ -690,4 +690,70 @@ final class SlotRepository
 
         return $inserted;
     }
+
+    /**
+     * Historico (cadastros finalizados: confirmada, cancelada, expirada), opcionalmente filtrado por nome.
+     * @return array<int, array<string, mixed>>
+     */
+    public function historyReservations(?string $name, int $limit = 500): array
+    {
+        $limit = max(1, min($limit, 1000));
+
+        $sql = "SELECT r.public_id AS reserva_id,
+                       r.cliente_nome,
+                       r.cliente_whatsapp,
+                       r.plano,
+                       r.status,
+                       r.confirmed_at,
+                       r.cancelled_at,
+                       r.created_at,
+                       s.public_id AS slot_id,
+                       s.slot_inicio,
+                       s.slot_fim,
+                       sa.numero AS sala_numero,
+                       sa.nome AS sala_nome
+                FROM reservas r
+                INNER JOIN agenda_slots s ON s.id = r.slot_id
+                INNER JOIN salas sa ON sa.id = r.sala_id
+                WHERE r.status <> 'lock_temporario'";
+
+        $params = [];
+        if ($name !== null && $name !== '') {
+            $sql .= ' AND r.cliente_nome LIKE :name';
+            $params['name'] = '%' . $name . '%';
+        }
+
+        $sql .= ' ORDER BY r.updated_at DESC LIMIT ' . $limit;
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Exclui do historico os cadastros informados (nunca os pendentes/ativos).
+     * @param array<int, string> $ids
+     */
+    public function deleteReservationsByPublicIds(array $ids): int
+    {
+        $ids = array_values(array_filter($ids, static fn ($v): bool => is_string($v) && $v !== ''));
+        if ($ids === []) {
+            return 0;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->pdo->prepare(
+            "DELETE FROM reservas WHERE public_id IN ({$placeholders}) AND status <> 'lock_temporario'"
+        );
+        $stmt->execute($ids);
+
+        return $stmt->rowCount();
+    }
+
+    /** Limpa todo o historico (cadastros finalizados). Preserva os pendentes/ativos. */
+    public function deleteAllHistory(): int
+    {
+        return (int) $this->pdo->exec("DELETE FROM reservas WHERE status <> 'lock_temporario'");
+    }
 }

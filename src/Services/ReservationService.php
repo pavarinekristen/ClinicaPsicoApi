@@ -121,4 +121,21 @@ final class ReservationService
     {
         return $this->slots->generateSlots($salaId, $startDate, $endDate, $hours);
     }
+
+    /** @return array<int, array<string, mixed>> */
+    public function history(?string $name): array
+    {
+        return $this->slots->historyReservations($name, 500);
+    }
+
+    /** @param array<int, string> $ids */
+    public function deleteFromHistory(array $ids): int
+    {
+        return $this->slots->deleteReservationsByPublicIds($ids);
+    }
+
+    public function clearHistory(): int
+    {
+        return $this->slots->deleteAllHistory();
+    }
 }

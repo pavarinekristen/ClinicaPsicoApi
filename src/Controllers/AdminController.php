@@ -70,6 +70,48 @@ final class AdminController
         ]);
     }
 
+    public function history(Request $request): never
+    {
+        // Leitura: nao auditada.
+        $this->authorize($request);
+
+        $name = Validator::optionalString($request->query('q'), 'q', 160);
+
+        Response::ok(['reservations' => $this->reservations->history($name)]);
+    }
+
+    public function deleteReservations(Request $request): never
+    {
+        $user = $this->authorize($request);
+
+        $ids = $request->input('reserva_ids');
+        if (!is_array($ids)) {
+            throw new AppException('Selecione ao menos um cadastro.', 422);
+        }
+
+        $ids = array_values(array_filter(
+            array_map(static fn ($v): string => is_string($v) ? trim($v) : '', $ids),
+            static fn (string $v): bool => $v !== ''
+        ));
+
+        if ($ids === []) {
+            throw new AppException('Selecione ao menos um cadastro.', 422);
+        }
+
+        $deleted = $this->reservations->deleteFromHistory($ids);
+        $this->audit->record($user, 'historico_excluido', 'reserva', null, ['quantidade' => $deleted], $request->ip());
+        Response::ok(['deleted' => $deleted]);
+    }
+
+    public function deleteAllHistory(Request $request): never
+    {
+        $user = $this->authorize($request);
+
+        $deleted = $this->reservations->clearHistory();
+        $this->audit->record($user, 'historico_limpo', 'reserva', null, ['quantidade' => $deleted], $request->ip());
+        Response::ok(['deleted' => $deleted]);
+    }
+
     public function confirmReservationById(Request $request): never
     {
         $user = $this->authorize($request);
