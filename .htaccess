@@ -25,4 +25,7 @@ RewriteRule ^ public/index.php [QSA,L]
   Header set Referrer-Policy "no-referrer"
   Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
   Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  # Desliga o anuncio de HTTP/3 (QUIC): evita "Failed to fetch" em redes que bloqueiam UDP.
+  Header unset Alt-Svc
+  Header always set Alt-Svc "clear"
 </IfModule>
