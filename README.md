@@ -128,6 +128,7 @@ Regras: codigo errado 422 (maximo 5 tentativas por reserva, depois 429); lock ex
 005_add_audit_log.sql     tabela audit_log (trilha de auditoria do painel)
 006_add_reserva_slots.sql tabela de ligacao reserva -> varios horarios
 007_add_reserva_slot_status.sql status/cancelamento individual por horario
+008_add_reserva_dados_profissionais.sql dados do cadastro profissional
 ```
 
 ## Deploy Hostinger

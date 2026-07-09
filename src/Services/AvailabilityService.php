@@ -29,6 +29,11 @@ final class AvailabilityService
                 'label' => $available ? 'Livre' : 'Bloqueado',
                 'locked_until' => $slot['locked_until'],
                 'seconds_to_unlock' => max(0, (int) ($slot['seconds_to_unlock'] ?? 0)),
+                'cliente_nome' => $slot['cliente_nome'] ?? null,
+                'cliente_whatsapp' => $slot['cliente_whatsapp'] ?? null,
+                'cliente_crp' => $slot['cliente_crp'] ?? null,
+                'publicos_atendidos' => $slot['publicos_atendidos'] ?? null,
+                'abordagem_trabalho' => $slot['abordagem_trabalho'] ?? null,
             ];
         }, $this->slots->slotsForDay($salaId, $date));
     }

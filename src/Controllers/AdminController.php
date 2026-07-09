@@ -154,8 +154,11 @@ final class AdminController
         $name = Validator::optionalString($request->input('cliente_nome'), 'cliente_nome', 160);
         $whatsapp = Validator::optionalString($request->input('cliente_whatsapp'), 'cliente_whatsapp', 32);
         $plan = Validator::optionalString($request->input('plano'), 'plano', 80);
+        $crp = Validator::optionalString($request->input('cliente_crp'), 'cliente_crp', 32);
+        $abordagem = Validator::optionalString($request->input('abordagem_trabalho'), 'abordagem_trabalho', 120);
+        $publicosAtendidos = $this->normalizePublicosAtendidos($request->input('publicos_atendidos'));
 
-        $this->reservations->adminUpdate($reservaId, $name, $whatsapp, $plan);
+        $this->reservations->adminUpdate($reservaId, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem);
 
         // Registra quais campos mudaram, sem gravar os valores (evita duplicar PII no log).
         $changed = [];
@@ -167,6 +170,15 @@ final class AdminController
         }
         if ($plan !== null) {
             $changed[] = 'plano';
+        }
+        if ($crp !== null) {
+            $changed[] = 'cliente_crp';
+        }
+        if ($abordagem !== null) {
+            $changed[] = 'abordagem_trabalho';
+        }
+        if ($publicosAtendidos !== null) {
+            $changed[] = 'publicos_atendidos';
         }
 
         $this->audit->record($user, 'reserva_editada', 'reserva', $reservaId, ['campos' => $changed], $request->ip());
@@ -242,5 +254,36 @@ final class AdminController
         }
 
         return trim($matches[1]);
+    }
+
+    /** @return array<int, string>|null */
+    private function normalizePublicosAtendidos(mixed $value): ?array
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_string($value)) {
+            $items = array_values(array_filter(array_map('trim', explode(',', $value)), static fn (string $item): bool => $item !== ''));
+            return $items === [] ? null : $items;
+        }
+
+        if (!is_array($value)) {
+            throw new AppException('Campo invalido: publicos_atendidos.', 422);
+        }
+
+        $items = [];
+        foreach ($value as $item) {
+            if (!is_string($item)) {
+                throw new AppException('Campo invalido: publicos_atendidos.', 422);
+            }
+
+            $item = trim($item);
+            if ($item !== '') {
+                $items[] = $item;
+            }
+        }
+
+        return $items === [] ? null : array_values(array_unique($items));
     }
 }

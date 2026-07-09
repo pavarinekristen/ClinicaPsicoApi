@@ -30,6 +30,9 @@ final class SlotRepository
                  cliente_nome = NULL,
                  cliente_whatsapp = NULL,
                  plano = NULL,
+                 cliente_crp = NULL,
+                 publicos_atendidos = NULL,
+                 abordagem_trabalho = NULL,
                  updated_at = UTC_TIMESTAMP()
              WHERE status = 'lock_temporario'
                AND locked_until <= UTC_TIMESTAMP()"
@@ -96,7 +99,7 @@ final class SlotRepository
     /** @param array<int, string> $slotPublicIds
      * @return array<string, mixed>
      */
-    public function lockSlots(array $slotPublicIds, string $token, string $confirmCode, int $ttlMinutes, ?string $name, ?string $whatsapp, string $plan, string $createdIp): array
+    public function lockSlots(array $slotPublicIds, string $token, string $confirmCode, int $ttlMinutes, ?string $name, ?string $whatsapp, string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem, string $createdIp): array
     {
         $this->cleanupExpiredLocks();
         $this->pdo->beginTransaction();
@@ -136,6 +139,9 @@ final class SlotRepository
                      cliente_nome = :cliente_nome,
                      cliente_whatsapp = :cliente_whatsapp,
                      plano = :plano,
+                     cliente_crp = :cliente_crp,
+                     publicos_atendidos = :publicos_atendidos,
+                     abordagem_trabalho = :abordagem_trabalho,
                      updated_at = UTC_TIMESTAMP()
                  WHERE public_id IN ({$placeholders})
                    AND (
@@ -149,6 +155,9 @@ final class SlotRepository
             $stmt->bindValue(':cliente_nome', $name);
             $stmt->bindValue(':cliente_whatsapp', $whatsapp);
             $stmt->bindValue(':plano', $plan);
+            $stmt->bindValue(':cliente_crp', $crp);
+            $stmt->bindValue(':publicos_atendidos', $publicosAtendidos !== null ? implode(',', $publicosAtendidos) : null);
+            $stmt->bindValue(':abordagem_trabalho', $abordagem);
             foreach ($idParams as $param => $publicId) {
                 $stmt->bindValue($param, $publicId);
             }
@@ -185,6 +194,9 @@ final class SlotRepository
                     cliente_nome,
                     cliente_whatsapp,
                     plano,
+                    cliente_crp,
+                    publicos_atendidos,
+                    abordagem_trabalho,
                     status,
                     lock_token,
                     confirm_code,
@@ -198,6 +210,9 @@ final class SlotRepository
                     :cliente_nome,
                     :cliente_whatsapp,
                     :plano,
+                    :cliente_crp,
+                    :publicos_atendidos,
+                    :abordagem_trabalho,
                     'lock_temporario',
                     :lock_token,
                     :confirm_code,
@@ -212,6 +227,9 @@ final class SlotRepository
                 'cliente_nome' => $name,
                 'cliente_whatsapp' => $whatsapp,
                 'plano' => $plan,
+                'cliente_crp' => $crp,
+                'publicos_atendidos' => $publicosAtendidos !== null ? implode(',', $publicosAtendidos) : null,
+                'abordagem_trabalho' => $abordagem,
                 'lock_token' => $token,
                 'confirm_code' => $confirmCode,
                 'created_ip' => $createdIp !== '' ? $createdIp : null,
@@ -491,13 +509,16 @@ final class SlotRepository
 
             $slotStmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
-                 SET status = 'livre',
+             SET status = 'livre',
                      lock_token = NULL,
                      locked_until = NULL,
                      confirmed_at = NULL,
                      cliente_nome = NULL,
                      cliente_whatsapp = NULL,
                      plano = NULL,
+                     cliente_crp = NULL,
+                     publicos_atendidos = NULL,
+                     abordagem_trabalho = NULL,
                      updated_at = UTC_TIMESTAMP()
                  WHERE lock_token = :lock_token
                    AND status IN ('lock_temporario', 'confirmada')"
@@ -557,13 +578,16 @@ final class SlotRepository
 
             $slotStmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
-                 SET status = 'livre',
+             SET status = 'livre',
                      lock_token = NULL,
                      locked_until = NULL,
                      confirmed_at = NULL,
                      cliente_nome = NULL,
                      cliente_whatsapp = NULL,
                      plano = NULL,
+                     cliente_crp = NULL,
+                     publicos_atendidos = NULL,
+                     abordagem_trabalho = NULL,
                      updated_at = UTC_TIMESTAMP()
                  WHERE id = :slot_id
                    AND status IN ('lock_temporario', 'confirmada')"
@@ -609,13 +633,13 @@ final class SlotRepository
      * Edita os dados do cliente em um cadastro ativo (pendente ou confirmado).
      * Campos null permanecem como estao.
      */
-    public function adminUpdateReservation(string $reservaPublicId, ?string $name, ?string $whatsapp, ?string $plan): bool
+    public function adminUpdateReservation(string $reservaPublicId, ?string $name, ?string $whatsapp, ?string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem): bool
     {
         $this->pdo->beginTransaction();
 
         try {
             $stmt = $this->pdo->prepare(
-                'SELECT id, slot_id, lock_token, status, cliente_nome, cliente_whatsapp, plano
+                'SELECT id, slot_id, lock_token, status, cliente_nome, cliente_whatsapp, plano, cliente_crp, publicos_atendidos, abordagem_trabalho
                  FROM reservas WHERE public_id = :public_id LIMIT 1 FOR UPDATE'
             );
             $stmt->execute(['public_id' => $reservaPublicId]);
@@ -630,6 +654,9 @@ final class SlotRepository
                 'cliente_nome' => $name ?? $reservation['cliente_nome'],
                 'cliente_whatsapp' => $whatsapp ?? $reservation['cliente_whatsapp'],
                 'plano' => $plan ?? $reservation['plano'],
+                'cliente_crp' => $crp ?? $reservation['cliente_crp'],
+                'publicos_atendidos' => $publicosAtendidos !== null ? implode(',', $publicosAtendidos) : $reservation['publicos_atendidos'],
+                'abordagem_trabalho' => $abordagem ?? $reservation['abordagem_trabalho'],
             ];
 
             $reservationStmt = $this->pdo->prepare(
@@ -637,6 +664,9 @@ final class SlotRepository
                  SET cliente_nome = :cliente_nome,
                      cliente_whatsapp = :cliente_whatsapp,
                      plano = :plano,
+                     cliente_crp = :cliente_crp,
+                     publicos_atendidos = :publicos_atendidos,
+                     abordagem_trabalho = :abordagem_trabalho,
                      updated_at = UTC_TIMESTAMP()
                  WHERE id = :id'
             );
@@ -647,6 +677,9 @@ final class SlotRepository
                  SET cliente_nome = :cliente_nome,
                      cliente_whatsapp = :cliente_whatsapp,
                      plano = :plano,
+                     cliente_crp = :cliente_crp,
+                     publicos_atendidos = :publicos_atendidos,
+                     abordagem_trabalho = :abordagem_trabalho,
                      updated_at = UTC_TIMESTAMP()
                  WHERE lock_token = :lock_token'
             );
@@ -671,6 +704,9 @@ final class SlotRepository
                     r.cliente_nome,
                     r.cliente_whatsapp,
                     r.plano,
+                    r.cliente_crp,
+                    r.publicos_atendidos,
+                    r.abordagem_trabalho,
                     r.status,
                     r.created_at,
                     SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
@@ -686,7 +722,7 @@ final class SlotRepository
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) = :date
                AND rs.status = 'ativa'
-             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.created_at, sa.numero, sa.nome
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.created_at, sa.numero, sa.nome
              ORDER BY slot_inicio, sa.numero"
         );
         $stmt->execute(['date' => $date]);
@@ -704,6 +740,9 @@ final class SlotRepository
                     r.cliente_nome,
                     r.cliente_whatsapp,
                     r.plano,
+                    r.cliente_crp,
+                    r.publicos_atendidos,
+                    r.abordagem_trabalho,
                     r.status,
                     r.confirm_code,
                     r.locked_until,
@@ -721,7 +760,7 @@ final class SlotRepository
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE r.status = 'lock_temporario'
                AND r.locked_until > UTC_TIMESTAMP()
-             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.confirm_code, r.locked_until, r.created_at, sa.numero, sa.nome
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.confirm_code, r.locked_until, r.created_at, sa.numero, sa.nome
              ORDER BY r.created_at DESC"
         );
 
@@ -730,6 +769,9 @@ final class SlotRepository
                     r.cliente_nome,
                     r.cliente_whatsapp,
                     r.plano,
+                    r.cliente_crp,
+                    r.publicos_atendidos,
+                    r.abordagem_trabalho,
                     r.status,
                     r.confirmed_at,
                     SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN rs.status = 'ativa' THEN s.public_id END ORDER BY s.slot_inicio), ',', 1) AS slot_id,
@@ -744,7 +786,7 @@ final class SlotRepository
              INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE r.status <> 'lock_temporario'
-             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.confirmed_at, r.updated_at, sa.numero, sa.nome
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.confirmed_at, r.updated_at, sa.numero, sa.nome
              ORDER BY r.updated_at DESC
              LIMIT 20"
         );
@@ -796,6 +838,9 @@ final class SlotRepository
                  cliente_nome = NULL,
                  cliente_whatsapp = NULL,
                  plano = NULL,
+                 cliente_crp = NULL,
+                 publicos_atendidos = NULL,
+                 abordagem_trabalho = NULL,
                  updated_at = UTC_TIMESTAMP()
              WHERE public_id = :slot_public_id
                AND status IN ('lock_temporario', 'bloqueada_admin')
@@ -942,6 +987,9 @@ final class SlotRepository
                        r.cliente_nome,
                        r.cliente_whatsapp,
                        r.plano,
+                       r.cliente_crp,
+                       r.publicos_atendidos,
+                       r.abordagem_trabalho,
                        r.status,
                        r.confirmed_at,
                        r.cancelled_at,
@@ -965,7 +1013,7 @@ final class SlotRepository
             $params['name'] = '%' . $name . '%';
         }
 
-        $sql .= ' GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.confirmed_at, r.cancelled_at, r.created_at, r.updated_at, sa.numero, sa.nome ORDER BY r.updated_at DESC LIMIT ' . $limit;
+        $sql .= ' GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.confirmed_at, r.cancelled_at, r.created_at, r.updated_at, sa.numero, sa.nome ORDER BY r.updated_at DESC LIMIT ' . $limit;
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);

@@ -18,7 +18,11 @@ final class ReservationService
     /** @param array<int, string> $slotIds
      * @return array<string, mixed>
      */
-    public function lock(array $slotIds, ?string $name, ?string $whatsapp, string $plan, string $ip): array
+    /**
+     * @param array<int, string> $publicosAtendidos
+     * @return array<string, mixed>
+     */
+    public function lock(array $slotIds, ?string $name, ?string $whatsapp, string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem, string $ip): array
     {
         $slotIds = array_values(array_unique(array_filter($slotIds, static fn ($id): bool => is_string($id) && $id !== '')));
         if ($slotIds === []) {
@@ -33,7 +37,7 @@ final class ReservationService
 
         $token = bin2hex(random_bytes(32));
         $confirmCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $slot = $this->slots->lockSlots($slotIds, $token, $confirmCode, $this->lockTtlMinutes, $name, $whatsapp, $plan, $ip);
+        $slot = $this->slots->lockSlots($slotIds, $token, $confirmCode, $this->lockTtlMinutes, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem, $ip);
 
         if ($slot === []) {
             throw new AppException('Horario indisponivel para a duracao escolhida. Atualize o calendario.', 409);
@@ -98,13 +102,16 @@ final class ReservationService
         }
     }
 
-    public function adminUpdate(string $reservaId, ?string $name, ?string $whatsapp, ?string $plan): void
+    /**
+     * @param array<int, string>|null $publicosAtendidos
+     */
+    public function adminUpdate(string $reservaId, ?string $name, ?string $whatsapp, ?string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem): void
     {
-        if ($name === null && $whatsapp === null && $plan === null) {
+        if ($name === null && $whatsapp === null && $plan === null && $crp === null && $publicosAtendidos === null && $abordagem === null) {
             throw new AppException('Nada para atualizar.', 422);
         }
 
-        if (!$this->slots->adminUpdateReservation($reservaId, $name, $whatsapp, $plan)) {
+        if (!$this->slots->adminUpdateReservation($reservaId, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem)) {
             throw new AppException('Reserva nao encontrada ou ja finalizada.', 409);
         }
     }
