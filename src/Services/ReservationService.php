@@ -15,24 +15,34 @@ final class ReservationService
 
     private const MAX_ACTIVE_LOCKS_PER_IP = 3;
 
-    /** @return array<string, mixed> */
-    public function lock(string $slotId, ?string $name, ?string $whatsapp, string $plan, string $ip): array
+    /** @param array<int, string> $slotIds
+     * @return array<string, mixed>
+     */
+    public function lock(array $slotIds, ?string $name, ?string $whatsapp, string $plan, string $ip): array
     {
+        $slotIds = array_values(array_unique(array_filter($slotIds, static fn ($id): bool => is_string($id) && $id !== '')));
+        if ($slotIds === []) {
+            throw new AppException('Selecione ao menos um horario.', 422);
+        }
+
+        $this->assertPlanDuration($plan, count($slotIds));
+
         if ($ip !== '' && $this->slots->activeLocksForIp($ip) >= self::MAX_ACTIVE_LOCKS_PER_IP) {
             throw new AppException('Limite de pre-reservas simultaneas atingido. Aguarde uma expirar ou fale com a equipe.', 429);
         }
 
         $token = bin2hex(random_bytes(32));
         $confirmCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $slot = $this->slots->lockSlot($slotId, $token, $confirmCode, $this->lockTtlMinutes, $name, $whatsapp, $plan, $ip);
+        $slot = $this->slots->lockSlots($slotIds, $token, $confirmCode, $this->lockTtlMinutes, $name, $whatsapp, $plan, $ip);
 
         if ($slot === []) {
-            throw new AppException('Horario indisponivel. Atualize o calendario.', 409);
+            throw new AppException('Horario indisponivel para a duracao escolhida. Atualize o calendario.', 409);
         }
 
         return [
             'reserva_id' => $slot['reserva_public_id'],
             'slot_id' => $slot['public_id'],
+            'slot_ids' => $slot['slot_public_ids'],
             'lock_token' => $token,
             'locked_until' => $slot['locked_until'],
             'sala' => [
@@ -43,6 +53,7 @@ final class ReservationService
             'inicio' => $slot['slot_inicio'],
             'fim' => $slot['slot_fim'],
             'status' => $slot['status'],
+            'duration_slots' => $slot['duration_slots'],
         ];
     }
 
@@ -137,5 +148,24 @@ final class ReservationService
     public function clearHistory(): int
     {
         return $this->slots->deleteAllHistory();
+    }
+
+    private function assertPlanDuration(string $plan, int $slots): void
+    {
+        $ranges = [
+            'Light - Hora avulsa' => [1, 1],
+            'Standard - 2 a 4 horas' => [2, 4],
+            'Full - 5 a 8 horas' => [5, 8],
+            'Premium - acima de 9 horas' => [9, 12],
+        ];
+
+        if (!isset($ranges[$plan])) {
+            throw new AppException('Esse plano precisa ser combinado diretamente com a equipe pelo WhatsApp.', 422);
+        }
+
+        [$min, $max] = $ranges[$plan];
+        if ($slots < $min || $slots > $max) {
+            throw new AppException("O plano selecionado exige entre {$min} e {$max} hora(s).", 422);
+        }
     }
 }

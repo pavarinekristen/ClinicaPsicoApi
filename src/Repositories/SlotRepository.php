@@ -93,13 +93,41 @@ final class SlotRepository
         return (int) ($stmt->fetch()['total'] ?? 0);
     }
 
-    /** @return array<string, mixed> */
-    public function lockSlot(string $slotPublicId, string $token, string $confirmCode, int $ttlMinutes, ?string $name, ?string $whatsapp, string $plan, string $createdIp): array
+    /** @param array<int, string> $slotPublicIds
+     * @return array<string, mixed>
+     */
+    public function lockSlots(array $slotPublicIds, string $token, string $confirmCode, int $ttlMinutes, ?string $name, ?string $whatsapp, string $plan, string $createdIp): array
     {
         $this->cleanupExpiredLocks();
         $this->pdo->beginTransaction();
 
         try {
+            $slotPublicIds = array_values(array_unique($slotPublicIds));
+            $idPlaceholders = [];
+            $idParams = [];
+            foreach ($slotPublicIds as $index => $publicId) {
+                $param = ':slot_public_id_' . $index;
+                $idPlaceholders[] = $param;
+                $idParams[$param] = $publicId;
+            }
+            $placeholders = implode(',', $idPlaceholders);
+
+            $lookup = $this->pdo->prepare(
+                "SELECT s.*, r.public_id AS sala_public_id, r.nome AS sala_nome, r.numero AS sala_numero
+                 FROM agenda_slots s
+                 INNER JOIN salas r ON r.id = s.sala_id
+                 WHERE s.public_id IN ({$placeholders})
+                 ORDER BY s.slot_inicio
+                 FOR UPDATE"
+            );
+            $lookup->execute($idParams);
+            $slots = $lookup->fetchAll();
+
+            if (count($slots) !== count($slotPublicIds) || !$this->slotsFormValidBlock($slots)) {
+                $this->pdo->rollBack();
+                return [];
+            }
+
             $stmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
                  SET status = 'lock_temporario',
@@ -109,12 +137,11 @@ final class SlotRepository
                      cliente_whatsapp = :cliente_whatsapp,
                      plano = :plano,
                      updated_at = UTC_TIMESTAMP()
-                 WHERE public_id = :slot_public_id
+                 WHERE public_id IN ({$placeholders})
                    AND (
                      status = 'livre'
                      OR (status = 'lock_temporario' AND locked_until <= UTC_TIMESTAMP())
-                   )
-                 LIMIT 1"
+                   )"
             );
 
             $stmt->bindValue(':token', $token);
@@ -122,20 +149,33 @@ final class SlotRepository
             $stmt->bindValue(':cliente_nome', $name);
             $stmt->bindValue(':cliente_whatsapp', $whatsapp);
             $stmt->bindValue(':plano', $plan);
-            $stmt->bindValue(':slot_public_id', $slotPublicId);
+            foreach ($idParams as $param => $publicId) {
+                $stmt->bindValue($param, $publicId);
+            }
             $stmt->execute();
 
-            if ($stmt->rowCount() !== 1) {
+            if ($stmt->rowCount() !== count($slotPublicIds)) {
                 $this->pdo->rollBack();
                 return [];
             }
 
-            $slot = $this->findSlotByPublicId($slotPublicId);
+            $lockedLookup = $this->pdo->prepare(
+                "SELECT s.*, r.public_id AS sala_public_id, r.nome AS sala_nome, r.numero AS sala_numero
+                 FROM agenda_slots s
+                 INNER JOIN salas r ON r.id = s.sala_id
+                 WHERE s.lock_token = :token
+                 ORDER BY s.slot_inicio"
+            );
+            $lockedLookup->execute(['token' => $token]);
+            $slots = $lockedLookup->fetchAll();
 
-            if (!$slot) {
+            if (count($slots) !== count($slotPublicIds)) {
                 $this->pdo->rollBack();
                 return [];
             }
+
+            $firstSlot = $slots[0];
+            $lastSlot = $slots[count($slots) - 1];
 
             $reservationStmt = $this->pdo->prepare(
                 "INSERT INTO reservas (
@@ -167,22 +207,38 @@ final class SlotRepository
             );
 
             $reservationStmt->execute([
-                'slot_id' => $slot['id'],
-                'sala_id' => $slot['sala_id'],
+                'slot_id' => $firstSlot['id'],
+                'sala_id' => $firstSlot['sala_id'],
                 'cliente_nome' => $name,
                 'cliente_whatsapp' => $whatsapp,
                 'plano' => $plan,
                 'lock_token' => $token,
                 'confirm_code' => $confirmCode,
                 'created_ip' => $createdIp !== '' ? $createdIp : null,
-                'locked_until' => $slot['locked_until'],
+                'locked_until' => $firstSlot['locked_until'],
             ]);
+
+            $reservationId = (int) $this->pdo->lastInsertId();
+            $linkStmt = $this->pdo->prepare(
+                'INSERT INTO reserva_slots (reserva_id, slot_id, ordem) VALUES (:reserva_id, :slot_id, :ordem)'
+            );
+            foreach ($slots as $index => $slot) {
+                $linkStmt->execute([
+                    'reserva_id' => $reservationId,
+                    'slot_id' => $slot['id'],
+                    'ordem' => $index + 1,
+                ]);
+            }
 
             $reservation = $this->findReservationByToken($token);
             $this->pdo->commit();
 
             return [
-                ...$slot,
+                ...$firstSlot,
+                'slot_inicio' => $firstSlot['slot_inicio'],
+                'slot_fim' => $lastSlot['slot_fim'],
+                'slot_public_ids' => array_map(static fn (array $slot): string => (string) $slot['public_id'], $slots),
+                'duration_slots' => count($slots),
                 'reserva_public_id' => $reservation['public_id'] ?? null,
             ];
         } catch (\Throwable $exception) {
@@ -202,32 +258,28 @@ final class SlotRepository
                      locked_until = NULL,
                      confirmed_at = UTC_TIMESTAMP(),
                      updated_at = UTC_TIMESTAMP()
-                 WHERE public_id = :slot_public_id
-                   AND lock_token = :token
+                 WHERE lock_token = :token
                    AND status = 'lock_temporario'
-                   AND locked_until > UTC_TIMESTAMP()
-                 LIMIT 1"
+                   AND locked_until > UTC_TIMESTAMP()"
             );
 
-            $stmt->execute(['slot_public_id' => $slotPublicId, 'token' => $token]);
+            $stmt->execute(['token' => $token]);
 
-            if ($stmt->rowCount() !== 1) {
+            if ($stmt->rowCount() < 1) {
                 $this->pdo->rollBack();
                 return false;
             }
 
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas r
-                 INNER JOIN agenda_slots s ON s.id = r.slot_id
                  SET r.status = 'confirmada',
                      r.locked_until = NULL,
                      r.confirmed_at = UTC_TIMESTAMP(),
                      r.updated_at = UTC_TIMESTAMP()
-                 WHERE s.public_id = :slot_public_id
-                   AND r.lock_token = :token
+                 WHERE r.lock_token = :token
                    AND r.status = 'lock_temporario'"
             );
-            $reservationStmt->execute(['slot_public_id' => $slotPublicId, 'token' => $token]);
+            $reservationStmt->execute(['token' => $token]);
 
             $this->pdo->commit();
 
@@ -251,6 +303,7 @@ final class SlotRepository
             $stmt = $this->pdo->prepare(
                 "SELECT r.id,
                         r.slot_id,
+                        r.lock_token,
                         r.status,
                         r.confirm_code,
                         r.confirm_attempts,
@@ -299,10 +352,10 @@ final class SlotRepository
                      locked_until = NULL,
                      confirmed_at = UTC_TIMESTAMP(),
                      updated_at = UTC_TIMESTAMP()
-                 WHERE id = :slot_id
+                 WHERE lock_token = :lock_token
                    AND status = 'lock_temporario'"
             );
-            $slotStmt->execute(['slot_id' => $reservation['slot_id']]);
+            $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
 
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas
@@ -333,7 +386,7 @@ final class SlotRepository
 
         try {
             $stmt = $this->pdo->prepare(
-                "SELECT id, slot_id, status, (locked_until > UTC_TIMESTAMP()) AS lock_valido
+                "SELECT id, slot_id, lock_token, status, (locked_until > UTC_TIMESTAMP()) AS lock_valido
                  FROM reservas
                  WHERE public_id = :public_id
                  LIMIT 1
@@ -363,10 +416,10 @@ final class SlotRepository
                      locked_until = NULL,
                      confirmed_at = UTC_TIMESTAMP(),
                      updated_at = UTC_TIMESTAMP()
-                 WHERE id = :slot_id
+                 WHERE lock_token = :lock_token
                    AND status = 'lock_temporario'"
             );
-            $slotStmt->execute(['slot_id' => $reservation['slot_id']]);
+            $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
 
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas
@@ -397,7 +450,7 @@ final class SlotRepository
 
         try {
             $stmt = $this->pdo->prepare(
-                'SELECT id, slot_id, status FROM reservas WHERE public_id = :public_id LIMIT 1 FOR UPDATE'
+                'SELECT id, slot_id, lock_token, status FROM reservas WHERE public_id = :public_id LIMIT 1 FOR UPDATE'
             );
             $stmt->execute(['public_id' => $reservaPublicId]);
             $reservation = $stmt->fetch();
@@ -437,10 +490,10 @@ final class SlotRepository
                      cliente_whatsapp = NULL,
                      plano = NULL,
                      updated_at = UTC_TIMESTAMP()
-                 WHERE id = :slot_id
+                 WHERE lock_token = :lock_token
                    AND status IN ('lock_temporario', 'confirmada')"
             );
-            $slotStmt->execute(['slot_id' => $reservation['slot_id']]);
+            $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
 
             $this->pdo->commit();
 
@@ -461,7 +514,7 @@ final class SlotRepository
 
         try {
             $stmt = $this->pdo->prepare(
-                'SELECT id, slot_id, status, cliente_nome, cliente_whatsapp, plano
+                'SELECT id, slot_id, lock_token, status, cliente_nome, cliente_whatsapp, plano
                  FROM reservas WHERE public_id = :public_id LIMIT 1 FOR UPDATE'
             );
             $stmt->execute(['public_id' => $reservaPublicId]);
@@ -494,9 +547,9 @@ final class SlotRepository
                      cliente_whatsapp = :cliente_whatsapp,
                      plano = :plano,
                      updated_at = UTC_TIMESTAMP()
-                 WHERE id = :slot_id'
+                 WHERE lock_token = :lock_token'
             );
-            $slotStmt->execute([...$values, 'slot_id' => $reservation['slot_id']]);
+            $slotStmt->execute([...$values, 'lock_token' => $reservation['lock_token']]);
 
             $this->pdo->commit();
 
@@ -519,16 +572,19 @@ final class SlotRepository
                     r.plano,
                     r.status,
                     r.created_at,
-                    s.public_id AS slot_id,
-                    s.slot_inicio,
-                    s.slot_fim,
+                    SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
+                    MIN(s.slot_inicio) AS slot_inicio,
+                    MAX(s.slot_fim) AS slot_fim,
+                    COUNT(*) AS duration_slots,
                     sa.numero AS sala_numero,
                     sa.nome AS sala_nome
              FROM reservas r
-             INNER JOIN agenda_slots s ON s.id = r.slot_id
+             INNER JOIN reserva_slots rs ON rs.reserva_id = r.id
+             INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) = :date
-             ORDER BY s.slot_inicio, sa.numero"
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.created_at, sa.numero, sa.nome
+             ORDER BY slot_inicio, sa.numero"
         );
         $stmt->execute(['date' => $date]);
 
@@ -549,16 +605,19 @@ final class SlotRepository
                     r.confirm_code,
                     r.locked_until,
                     TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), r.locked_until) AS seconds_to_expire,
-                    s.public_id AS slot_id,
-                    s.slot_inicio,
-                    s.slot_fim,
+                    SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
+                    MIN(s.slot_inicio) AS slot_inicio,
+                    MAX(s.slot_fim) AS slot_fim,
+                    COUNT(*) AS duration_slots,
                     sa.numero AS sala_numero,
                     sa.nome AS sala_nome
              FROM reservas r
-             INNER JOIN agenda_slots s ON s.id = r.slot_id
+             INNER JOIN reserva_slots rs ON rs.reserva_id = r.id
+             INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE r.status = 'lock_temporario'
                AND r.locked_until > UTC_TIMESTAMP()
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.confirm_code, r.locked_until, r.created_at, sa.numero, sa.nome
              ORDER BY r.created_at DESC"
         );
 
@@ -569,15 +628,18 @@ final class SlotRepository
                     r.plano,
                     r.status,
                     r.confirmed_at,
-                    s.public_id AS slot_id,
-                    s.slot_inicio,
-                    s.slot_fim,
+                    SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
+                    MIN(s.slot_inicio) AS slot_inicio,
+                    MAX(s.slot_fim) AS slot_fim,
+                    COUNT(*) AS duration_slots,
                     sa.numero AS sala_numero,
                     sa.nome AS sala_nome
              FROM reservas r
-             INNER JOIN agenda_slots s ON s.id = r.slot_id
+             INNER JOIN reserva_slots rs ON rs.reserva_id = r.id
+             INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE r.status <> 'lock_temporario'
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.confirmed_at, r.updated_at, sa.numero, sa.nome
              ORDER BY r.updated_at DESC
              LIMIT 20"
         );
@@ -638,6 +700,40 @@ final class SlotRepository
         $stmt->execute(['slot_public_id' => $slotPublicId]);
 
         return $stmt->rowCount() === 1;
+    }
+
+    /** @param array<int, array<string, mixed>> $slots */
+    private function slotsFormValidBlock(array $slots): bool
+    {
+        if ($slots === []) {
+            return false;
+        }
+
+        $roomId = (int) $slots[0]['sala_id'];
+        $localDate = $this->localDate((string) $slots[0]['slot_inicio']);
+
+        foreach ($slots as $slot) {
+            if ((int) $slot['sala_id'] !== $roomId) {
+                return false;
+            }
+
+            if ($slot['status'] !== 'livre') {
+                return false;
+            }
+
+            if ($this->localDate((string) $slot['slot_inicio']) !== $localDate) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function localDate(string $utcDateTime): string
+    {
+        return (new \DateTimeImmutable($utcDateTime, new \DateTimeZone('UTC')))
+            ->setTimezone(new \DateTimeZone('America/Sao_Paulo'))
+            ->format('Y-m-d');
     }
 
     /** @return array<string, mixed>|null */
@@ -707,13 +803,15 @@ final class SlotRepository
                        r.confirmed_at,
                        r.cancelled_at,
                        r.created_at,
-                       s.public_id AS slot_id,
-                       s.slot_inicio,
-                       s.slot_fim,
+                       SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
+                       MIN(s.slot_inicio) AS slot_inicio,
+                       MAX(s.slot_fim) AS slot_fim,
+                       COUNT(*) AS duration_slots,
                        sa.numero AS sala_numero,
                        sa.nome AS sala_nome
                 FROM reservas r
-                INNER JOIN agenda_slots s ON s.id = r.slot_id
+                INNER JOIN reserva_slots rs ON rs.reserva_id = r.id
+                INNER JOIN agenda_slots s ON s.id = rs.slot_id
                 INNER JOIN salas sa ON sa.id = r.sala_id
                 WHERE r.status <> 'lock_temporario'";
 
@@ -723,7 +821,7 @@ final class SlotRepository
             $params['name'] = '%' . $name . '%';
         }
 
-        $sql .= ' ORDER BY r.updated_at DESC LIMIT ' . $limit;
+        $sql .= ' GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.status, r.confirmed_at, r.cancelled_at, r.created_at, r.updated_at, sa.numero, sa.nome ORDER BY r.updated_at DESC LIMIT ' . $limit;
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);

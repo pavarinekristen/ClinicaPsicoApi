@@ -18,12 +18,21 @@ final class ReservationController
 
     public function lock(Request $request): never
     {
-        $slotId = Validator::requiredString($request->input('slot_id'), 'slot_id', 36);
+        $slotIdsInput = $request->input('slot_ids');
+        if (is_array($slotIdsInput)) {
+            $slotIds = array_values(array_unique(array_map(
+                static fn ($value): string => Validator::requiredString($value, 'slot_ids', 36),
+                $slotIdsInput
+            )));
+        } else {
+            $slotIds = [Validator::requiredString($request->input('slot_id'), 'slot_id', 36)];
+        }
+
         $name = Validator::optionalString($request->input('cliente_nome'), 'cliente_nome', 160);
         $whatsapp = Validator::optionalString($request->input('cliente_whatsapp'), 'cliente_whatsapp', 32);
         $plan = Validator::requiredString($request->input('plano'), 'plano', 80);
 
-        Response::ok($this->reservations->lock($slotId, $name, $whatsapp, $plan, $request->ip()));
+        Response::ok($this->reservations->lock($slotIds, $name, $whatsapp, $plan, $request->ip()));
     }
 
     public function confirm(Request $request): never

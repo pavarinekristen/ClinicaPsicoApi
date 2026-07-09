@@ -126,6 +126,7 @@ Regras: codigo errado 422 (maximo 5 tentativas por reserva, depois 429); lock ex
 003_add_confirm_code.sql  confirm_code CHAR(6) + confirm_attempts em reservas
 004_add_created_ip.sql    created_ip VARCHAR(45) + indice (rate limit por IP)
 005_add_audit_log.sql     tabela audit_log (trilha de auditoria do painel)
+006_add_reserva_slots.sql tabela de ligacao reserva -> varios horarios
 ```
 
 ## Deploy Hostinger
