@@ -5,6 +5,18 @@ API PHP/MySQL para calendario de disponibilidade, soft lock de horarios e confir
 Repositorio: `https://github.com/pavarinekristen/ClinicaPsicoApi`
 Branches: `main` (producao) e `developer` (homologacao). Trabalho novo entra por `feat/*` -> PR -> `developer` -> `main`.
 
+## Estado atual (producao)
+
+No ar em **https://clinicaideia.com.br/api** (PHP 8.2 + MySQL da Hostinger). Login nominal
+(usuario `Nilza`), auditoria ativa, agenda com horarios gerados ate 31/12/2026.
+
+**Deploy AUTOMATICO ligado**: cada `push` na `main` faz a Hostinger dar `git pull` sozinha em
+`public_html/api` (Git nativo da Hostinger + Webhook do GitHub — testado e funcionando). Sem
+build, sem passo manual. Passo a passo completo em `DEPLOY.md`.
+
+O `.env` de producao (credenciais, `APP_KEY`, hash da senha) vive **so no servidor** e nunca vai
+para o repositorio. O front (site) tem deploy separado — ver `FrontSitePsico`.
+
 ## Stack
 
 - PHP 8.1+
