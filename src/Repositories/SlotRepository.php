@@ -1092,7 +1092,12 @@ final class SlotRepository
         return $stmt->rowCount() === 1;
     }
 
-    /** @param array<int, array<string, mixed>> $slots */
+    /**
+     * Pacotes mensais aceitam horarios nao consecutivos, mas sempre na mesma sala,
+     * no mesmo mes local e somente com slots ainda livres.
+     *
+     * @param array<int, array<string, mixed>> $slots
+     */
     private function slotsFormValidPackage(array $slots): bool
     {
         if ($slots === []) {

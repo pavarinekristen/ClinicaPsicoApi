@@ -98,6 +98,7 @@ Se duas pessoas clicarem ao mesmo tempo, apenas uma atualizacao afeta 1 linha; a
 - Para calendario semanal/mensal, use `/availability/range`; a API agrupa os slots por data local em `slots_by_date` e limita cada consulta a 62 dias.
 - Podem existir varios cadastros no mesmo dia, mas nunca dois ativos para a mesma sala no mesmo horario (`UNIQUE (sala_id, slot_inicio)`).
 - Quando um slot e travado, a API grava o cadastro completo em `reservas`.
+- Pacotes mensais podem ter horarios nao consecutivos; a API exige apenas mesma sala, mesmo mes local e todos os slots livres.
 - Slots com `lock_temporario`, `confirmada` ou `bloqueada_admin` aparecem bloqueados/vermelhos.
 - Locks expirados voltam para `livre` automaticamente na proxima consulta.
 
