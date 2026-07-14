@@ -99,6 +99,14 @@ Se duas pessoas clicarem ao mesmo tempo, apenas uma atualizacao afeta 1 linha; a
 - Slots com `lock_temporario`, `confirmada` ou `bloqueada_admin` aparecem bloqueados/vermelhos.
 - Locks expirados voltam para `livre` automaticamente na proxima consulta.
 
+Rotina recomendada para cron na hospedagem:
+
+```bash
+php /caminho/da/api/scripts/cleanup-expired-locks.php
+```
+
+Essa rotina libera locks expirados mesmo sem acesso de usuarios e registra o resultado em `storage/logs/cleanup-expired-locks.log`.
+
 ## Confirmacao por codigo
 
 Ao travar um slot, a API gera um codigo de 6 digitos gravado na reserva.

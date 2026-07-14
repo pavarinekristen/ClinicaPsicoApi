@@ -12,9 +12,10 @@ final class SlotRepository
     {
     }
 
-    public function cleanupExpiredLocks(): void
+    /** @return array{expired_reservations: int, released_slots: int} */
+    public function cleanupExpiredLocks(): array
     {
-        $this->pdo->exec(
+        $expiredReservations = (int) $this->pdo->exec(
             "UPDATE reservas
              SET status = 'expirada',
                  updated_at = UTC_TIMESTAMP()
@@ -22,7 +23,7 @@ final class SlotRepository
                AND locked_until <= UTC_TIMESTAMP()"
         );
 
-        $this->pdo->exec(
+        $releasedSlots = (int) $this->pdo->exec(
             "UPDATE agenda_slots
              SET status = 'livre',
                  lock_token = NULL,
@@ -37,6 +38,11 @@ final class SlotRepository
              WHERE status = 'lock_temporario'
                AND locked_until <= UTC_TIMESTAMP()"
         );
+
+        return [
+            'expired_reservations' => $expiredReservations,
+            'released_slots' => $releasedSlots,
+        ];
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -267,9 +273,31 @@ final class SlotRepository
 
     public function confirmSlot(string $slotPublicId, string $token): bool
     {
+        $this->cleanupExpiredLocks();
         $this->pdo->beginTransaction();
 
         try {
+            $reservationStmt = $this->pdo->prepare(
+                "SELECT id, status, (locked_until > UTC_TIMESTAMP()) AS lock_valido
+                 FROM reservas
+                 WHERE lock_token = :token
+                 LIMIT 1
+                 FOR UPDATE"
+            );
+            $reservationStmt->execute(['token' => $token]);
+            $reservation = $reservationStmt->fetch();
+
+            if (!$reservation || $reservation['status'] !== 'lock_temporario' || !(int) $reservation['lock_valido']) {
+                $this->pdo->rollBack();
+                return false;
+            }
+
+            $activeSlots = $this->activeReservationSlotCount((int) $reservation['id']);
+            if ($activeSlots < 1) {
+                $this->pdo->rollBack();
+                return false;
+            }
+
             $stmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
                  SET status = 'confirmada',
@@ -283,12 +311,12 @@ final class SlotRepository
 
             $stmt->execute(['token' => $token]);
 
-            if ($stmt->rowCount() < 1) {
+            if ($stmt->rowCount() !== $activeSlots) {
                 $this->pdo->rollBack();
                 return false;
             }
 
-            $reservationStmt = $this->pdo->prepare(
+            $updateReservationStmt = $this->pdo->prepare(
                 "UPDATE reservas r
                  SET r.status = 'confirmada',
                      r.locked_until = NULL,
@@ -297,7 +325,7 @@ final class SlotRepository
                  WHERE r.lock_token = :token
                    AND r.status = 'lock_temporario'"
             );
-            $reservationStmt->execute(['token' => $token]);
+            $updateReservationStmt->execute(['token' => $token]);
 
             $this->pdo->commit();
 
@@ -364,6 +392,12 @@ final class SlotRepository
                 return 'invalid';
             }
 
+            $activeSlots = $this->activeReservationSlotCount((int) $reservation['id']);
+            if ($activeSlots < 1) {
+                $this->pdo->rollBack();
+                return 'expired';
+            }
+
             $slotStmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
                  SET status = 'confirmada',
@@ -374,6 +408,11 @@ final class SlotRepository
                    AND status = 'lock_temporario'"
             );
             $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
+
+            if ($slotStmt->rowCount() !== $activeSlots) {
+                $this->pdo->rollBack();
+                return 'expired';
+            }
 
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas
@@ -428,6 +467,12 @@ final class SlotRepository
                 return false;
             }
 
+            $activeSlots = $this->activeReservationSlotCount((int) $reservation['id']);
+            if ($activeSlots < 1) {
+                $this->pdo->rollBack();
+                return false;
+            }
+
             $slotStmt = $this->pdo->prepare(
                 "UPDATE agenda_slots
                  SET status = 'confirmada',
@@ -438,6 +483,11 @@ final class SlotRepository
                    AND status = 'lock_temporario'"
             );
             $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
+
+            if ($slotStmt->rowCount() !== $activeSlots) {
+                $this->pdo->rollBack();
+                return false;
+            }
 
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas
@@ -799,21 +849,116 @@ final class SlotRepository
 
     public function blockSlot(string $slotPublicId, string $reason): bool
     {
-        $stmt = $this->pdo->prepare(
-            "UPDATE agenda_slots
-             SET status = 'bloqueada_admin',
-                 lock_token = NULL,
-                 locked_until = NULL,
-                 bloqueio_motivo = :reason,
-                 updated_at = UTC_TIMESTAMP()
-             WHERE public_id = :slot_public_id
-               AND status <> 'confirmada'
-             LIMIT 1"
-        );
+        $this->cleanupExpiredLocks();
+        $this->pdo->beginTransaction();
 
-        $stmt->execute(['slot_public_id' => $slotPublicId, 'reason' => $reason]);
+        try {
+            $slotStmt = $this->pdo->prepare(
+                "SELECT id, status, lock_token
+                 FROM agenda_slots
+                 WHERE public_id = :slot_public_id
+                 LIMIT 1
+                 FOR UPDATE"
+            );
+            $slotStmt->execute(['slot_public_id' => $slotPublicId]);
+            $slot = $slotStmt->fetch();
 
-        return $stmt->rowCount() === 1;
+            if (!$slot || $slot['status'] === 'confirmada') {
+                $this->pdo->rollBack();
+                return false;
+            }
+
+            if ($slot['status'] === 'lock_temporario' && $slot['lock_token']) {
+                $reservationStmt = $this->pdo->prepare(
+                    "SELECT id, lock_token
+                     FROM reservas
+                     WHERE lock_token = :lock_token
+                       AND status = 'lock_temporario'
+                     FOR UPDATE"
+                );
+                $reservationStmt->execute(['lock_token' => $slot['lock_token']]);
+                $reservations = $reservationStmt->fetchAll();
+
+                if ($reservations !== []) {
+                    $reservationIds = array_map(static fn (array $reservation): int => (int) $reservation['id'], $reservations);
+                    $placeholders = implode(',', array_fill(0, count($reservationIds), '?'));
+
+                    $cancelReservationsStmt = $this->pdo->prepare(
+                        "UPDATE reservas
+                         SET status = 'cancelada',
+                             cancelled_at = UTC_TIMESTAMP(),
+                             locked_until = NULL,
+                             updated_at = UTC_TIMESTAMP()
+                         WHERE id IN ({$placeholders})"
+                    );
+                    $cancelReservationsStmt->execute($reservationIds);
+
+                    $cancelLinksStmt = $this->pdo->prepare(
+                        "UPDATE reserva_slots
+                         SET status = 'cancelada',
+                             cancelled_at = UTC_TIMESTAMP()
+                         WHERE reserva_id IN ({$placeholders})
+                           AND status = 'ativa'"
+                    );
+                    $cancelLinksStmt->execute($reservationIds);
+                }
+
+                $releasePackageStmt = $this->pdo->prepare(
+                    "UPDATE agenda_slots
+                     SET status = 'livre',
+                         lock_token = NULL,
+                         locked_until = NULL,
+                         confirmed_at = NULL,
+                         cliente_nome = NULL,
+                         cliente_whatsapp = NULL,
+                         plano = NULL,
+                         cliente_crp = NULL,
+                         publicos_atendidos = NULL,
+                         abordagem_trabalho = NULL,
+                         updated_at = UTC_TIMESTAMP()
+                     WHERE lock_token = :lock_token
+                       AND status = 'lock_temporario'
+                       AND id <> :slot_id"
+                );
+                $releasePackageStmt->execute([
+                    'lock_token' => $slot['lock_token'],
+                    'slot_id' => $slot['id'],
+                ]);
+            }
+
+            $stmt = $this->pdo->prepare(
+                "UPDATE agenda_slots
+                 SET status = 'bloqueada_admin',
+                     lock_token = NULL,
+                     locked_until = NULL,
+                     confirmed_at = NULL,
+                     cliente_nome = NULL,
+                     cliente_whatsapp = NULL,
+                     plano = NULL,
+                     cliente_crp = NULL,
+                     publicos_atendidos = NULL,
+                     abordagem_trabalho = NULL,
+                     bloqueio_motivo = :reason,
+                     updated_at = UTC_TIMESTAMP()
+                 WHERE id = :slot_id
+                   AND status <> 'confirmada'
+                 LIMIT 1"
+            );
+
+            $stmt->execute(['slot_id' => $slot['id'], 'reason' => $reason]);
+
+            if ($stmt->rowCount() !== 1) {
+                $this->pdo->rollBack();
+                return false;
+            }
+
+            $this->pdo->commit();
+
+            return true;
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
     }
 
     public function unblockSlot(string $slotPublicId): bool
@@ -886,6 +1031,21 @@ final class SlotRepository
             ->format('Y-m');
     }
 
+    private function activeReservationSlotCount(int $reservationId): int
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) AS total
+             FROM reserva_slots rs
+             INNER JOIN agenda_slots s ON s.id = rs.slot_id
+             WHERE rs.reserva_id = :reservation_id
+               AND rs.status = 'ativa'
+               AND s.status = 'lock_temporario'
+               AND s.locked_until > UTC_TIMESTAMP()"
+        );
+        $stmt->execute(['reservation_id' => $reservationId]);
+
+        return (int) ($stmt->fetch()['total'] ?? 0);
+    }
     /** @param array<int, array<string, mixed>> $rows
      * @return array<int, array<string, mixed>>
      */
