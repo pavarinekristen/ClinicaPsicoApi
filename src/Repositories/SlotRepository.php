@@ -105,7 +105,7 @@ final class SlotRepository
     /** @param array<int, string> $slotPublicIds
      * @return array<string, mixed>
      */
-    public function lockSlots(array $slotPublicIds, string $token, string $confirmCode, int $ttlMinutes, ?string $name, ?string $whatsapp, string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem, string $createdIp): array
+    public function lockSlots(array $slotPublicIds, string $token, string $confirmCode, int $ttlMinutes, ?string $name, ?string $whatsapp, string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem, string $createdIp, array $aceite): array
     {
         $this->cleanupExpiredLocks();
         $this->pdo->beginTransaction();
@@ -207,6 +207,15 @@ final class SlotRepository
                     lock_token,
                     confirm_code,
                     created_ip,
+                    aceite_termos,
+                    aceite_privacidade,
+                    versao_termos,
+                    versao_privacidade,
+                    data_hora_aceite,
+                    origem_aceite,
+                    texto_aceite,
+                    aceite_user_agent,
+                    aceite_ip,
                     locked_until
                  )
                  VALUES (
@@ -223,6 +232,15 @@ final class SlotRepository
                     :lock_token,
                     :confirm_code,
                     :created_ip,
+                    :aceite_termos,
+                    :aceite_privacidade,
+                    :versao_termos,
+                    :versao_privacidade,
+                    :data_hora_aceite,
+                    :origem_aceite,
+                    :texto_aceite,
+                    :aceite_user_agent,
+                    :aceite_ip,
                     :locked_until
                  )"
             );
@@ -239,6 +257,15 @@ final class SlotRepository
                 'lock_token' => $token,
                 'confirm_code' => $confirmCode,
                 'created_ip' => $createdIp !== '' ? $createdIp : null,
+                'aceite_termos' => $aceite['aceite_termos'] ? 1 : 0,
+                'aceite_privacidade' => $aceite['aceite_privacidade'] ? 1 : 0,
+                'versao_termos' => $aceite['versao_termos'],
+                'versao_privacidade' => $aceite['versao_privacidade'],
+                'data_hora_aceite' => $aceite['data_hora_aceite'],
+                'origem_aceite' => $aceite['origem_aceite'],
+                'texto_aceite' => $aceite['texto_aceite'],
+                'aceite_user_agent' => $aceite['aceite_user_agent'],
+                'aceite_ip' => $aceite['aceite_ip'],
                 'locked_until' => $firstSlot['locked_until'],
             ]);
 
@@ -319,6 +346,8 @@ final class SlotRepository
             $updateReservationStmt = $this->pdo->prepare(
                 "UPDATE reservas r
                  SET r.status = 'confirmada',
+                     r.payment_status = 'pix_recebido',
+                     r.pix_received_at = COALESCE(r.pix_received_at, UTC_TIMESTAMP()),
                      r.locked_until = NULL,
                      r.confirmed_at = UTC_TIMESTAMP(),
                      r.updated_at = UTC_TIMESTAMP()
@@ -417,6 +446,8 @@ final class SlotRepository
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas
                  SET status = 'confirmada',
+                     payment_status = 'pix_recebido',
+                     pix_received_at = COALESCE(pix_received_at, UTC_TIMESTAMP()),
                      locked_until = NULL,
                      confirmed_at = UTC_TIMESTAMP(),
                      updated_at = UTC_TIMESTAMP()
@@ -431,6 +462,25 @@ final class SlotRepository
             $this->pdo->rollBack();
             throw $exception;
         }
+    }
+
+    public function adminMarkPixReceived(string $reservaPublicId): bool
+    {
+        $this->cleanupExpiredLocks();
+
+        $stmt = $this->pdo->prepare(
+            "UPDATE reservas
+             SET payment_status = 'pix_recebido',
+                 pix_received_at = COALESCE(pix_received_at, UTC_TIMESTAMP()),
+                 updated_at = UTC_TIMESTAMP()
+             WHERE public_id = :public_id
+               AND status = 'lock_temporario'
+               AND locked_until > UTC_TIMESTAMP()
+             LIMIT 1"
+        );
+        $stmt->execute(['public_id' => $reservaPublicId]);
+
+        return $stmt->rowCount() === 1;
     }
 
     /**
@@ -492,6 +542,8 @@ final class SlotRepository
             $reservationStmt = $this->pdo->prepare(
                 "UPDATE reservas
                  SET status = 'confirmada',
+                     payment_status = 'pix_recebido',
+                     pix_received_at = COALESCE(pix_received_at, UTC_TIMESTAMP()),
                      locked_until = NULL,
                      confirmed_at = UTC_TIMESTAMP(),
                      updated_at = UTC_TIMESTAMP()
@@ -758,6 +810,8 @@ final class SlotRepository
                     r.publicos_atendidos,
                     r.abordagem_trabalho,
                     r.status,
+                    r.payment_status,
+                    r.pix_received_at,
                     r.created_at,
                     SUBSTRING_INDEX(GROUP_CONCAT(s.public_id ORDER BY rs.ordem), ',', 1) AS slot_id,
                     MIN(s.slot_inicio) AS slot_inicio,
@@ -772,7 +826,7 @@ final class SlotRepository
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) = :date
                AND rs.status = 'ativa'
-             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.created_at, sa.numero, sa.nome
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.payment_status, r.pix_received_at, r.created_at, sa.numero, sa.nome
              ORDER BY slot_inicio, sa.numero"
         );
         $stmt->execute(['date' => $date]);
@@ -794,6 +848,8 @@ final class SlotRepository
                     r.publicos_atendidos,
                     r.abordagem_trabalho,
                     r.status,
+                    r.payment_status,
+                    r.pix_received_at,
                     r.confirm_code,
                     r.locked_until,
                     TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), r.locked_until) AS seconds_to_expire,
@@ -810,7 +866,7 @@ final class SlotRepository
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE r.status = 'lock_temporario'
                AND r.locked_until > UTC_TIMESTAMP()
-             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.confirm_code, r.locked_until, r.created_at, sa.numero, sa.nome
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.payment_status, r.pix_received_at, r.confirm_code, r.locked_until, r.created_at, sa.numero, sa.nome
              ORDER BY r.created_at DESC"
         );
 
@@ -823,6 +879,8 @@ final class SlotRepository
                     r.publicos_atendidos,
                     r.abordagem_trabalho,
                     r.status,
+                    r.payment_status,
+                    r.pix_received_at,
                     r.confirmed_at,
                     SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN rs.status = 'ativa' THEN s.public_id END ORDER BY s.slot_inicio), ',', 1) AS slot_id,
                     COALESCE(MIN(CASE WHEN rs.status = 'ativa' THEN s.slot_inicio END), MIN(s.slot_inicio)) AS slot_inicio,
@@ -836,7 +894,7 @@ final class SlotRepository
              INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
              WHERE r.status <> 'lock_temporario'
-             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.confirmed_at, r.updated_at, sa.numero, sa.nome
+             GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.payment_status, r.pix_received_at, r.confirmed_at, r.updated_at, sa.numero, sa.nome
              ORDER BY r.updated_at DESC
              LIMIT 20"
         );
@@ -1046,6 +1104,7 @@ final class SlotRepository
 
         return (int) ($stmt->fetch()['total'] ?? 0);
     }
+
     /** @param array<int, array<string, mixed>> $rows
      * @return array<int, array<string, mixed>>
      */
@@ -1151,6 +1210,8 @@ final class SlotRepository
                        r.publicos_atendidos,
                        r.abordagem_trabalho,
                        r.status,
+                       r.payment_status,
+                       r.pix_received_at,
                        r.confirmed_at,
                        r.cancelled_at,
                        r.created_at,
@@ -1173,7 +1234,7 @@ final class SlotRepository
             $params['name'] = '%' . $name . '%';
         }
 
-        $sql .= ' GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.confirmed_at, r.cancelled_at, r.created_at, r.updated_at, sa.numero, sa.nome ORDER BY r.updated_at DESC LIMIT ' . $limit;
+        $sql .= ' GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.payment_status, r.pix_received_at, r.confirmed_at, r.cancelled_at, r.created_at, r.updated_at, sa.numero, sa.nome ORDER BY r.updated_at DESC LIMIT ' . $limit;
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);

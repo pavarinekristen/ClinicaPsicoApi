@@ -49,6 +49,7 @@ $router->post('/admin/reservations/delete-all', static fn (Request $request) => 
 $router->post('/admin/slots/generate', static fn (Request $request) => adminController()->generateSlots($request));
 $router->post('/admin/reservations/confirm', static fn (Request $request) => adminController()->confirmReservation($request));
 $router->post('/admin/reservations/confirm-by-id', static fn (Request $request) => adminController()->confirmReservationById($request));
+$router->post('/admin/reservations/pix-received', static fn (Request $request) => adminController()->markPixReceived($request));
 $router->post('/admin/reservations/cancel', static fn (Request $request) => adminController()->cancelReservation($request));
 $router->post('/admin/reservations/cancel-slot', static fn (Request $request) => adminController()->cancelReservationSlot($request));
 $router->post('/admin/reservations/update', static fn (Request $request) => adminController()->updateReservation($request));

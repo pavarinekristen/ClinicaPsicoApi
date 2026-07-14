@@ -123,6 +123,17 @@ final class AdminController
         Response::ok(['confirmed' => true]);
     }
 
+    public function markPixReceived(Request $request): never
+    {
+        $user = $this->authorize($request);
+
+        $reservaId = Validator::requiredString($request->input('reserva_id'), 'reserva_id', 36);
+
+        $this->reservations->adminMarkPixReceived($reservaId);
+        $this->audit->record($user, 'pix_recebido', 'reserva', $reservaId, [], $request->ip());
+        Response::ok(['payment_status' => 'pix_recebido']);
+    }
+
     public function cancelReservation(Request $request): never
     {
         $user = $this->authorize($request);

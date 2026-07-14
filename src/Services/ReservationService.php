@@ -22,7 +22,7 @@ final class ReservationService
      * @param array<int, string> $publicosAtendidos
      * @return array<string, mixed>
      */
-    public function lock(array $slotIds, ?string $name, ?string $whatsapp, string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem, string $ip): array
+    public function lock(array $slotIds, ?string $name, ?string $whatsapp, string $plan, ?string $crp, ?array $publicosAtendidos, ?string $abordagem, string $ip, array $aceite): array
     {
         $slotIds = array_values(array_unique(array_filter($slotIds, static fn ($id): bool => is_string($id) && $id !== '')));
         if ($slotIds === []) {
@@ -37,7 +37,7 @@ final class ReservationService
 
         $token = bin2hex(random_bytes(32));
         $confirmCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $slot = $this->slots->lockSlots($slotIds, $token, $confirmCode, $this->lockTtlMinutes, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem, $ip);
+        $slot = $this->slots->lockSlots($slotIds, $token, $confirmCode, $this->lockTtlMinutes, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem, $ip, $aceite);
 
         if ($slot === []) {
             throw new AppException('Horario indisponivel para a duracao escolhida. Atualize o calendario.', 409);
@@ -84,6 +84,14 @@ final class ReservationService
     public function adminConfirm(string $reservaId): void
     {
         if (!$this->slots->adminConfirmReservation($reservaId)) {
+            throw new AppException('Reserva nao encontrada, expirada ou ja finalizada.', 409);
+        }
+    }
+
+    
+    public function adminMarkPixReceived(string $reservaId): void
+    {
+        if (!$this->slots->adminMarkPixReceived($reservaId)) {
             throw new AppException('Reserva nao encontrada, expirada ou ja finalizada.', 409);
         }
     }

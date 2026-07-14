@@ -34,8 +34,9 @@ final class ReservationController
         $crp = Validator::optionalString($request->input('cliente_crp'), 'cliente_crp', 32);
         $abordagem = Validator::optionalString($request->input('abordagem_trabalho'), 'abordagem_trabalho', 120);
         $publicosAtendidos = $this->normalizePublicosAtendidos($request->input('publicos_atendidos'));
+        $aceite = $this->normalizeAceite($request->input('aceite'), $request->ip(), $request->header('user-agent'));
 
-        Response::ok($this->reservations->lock($slotIds, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem, $request->ip()));
+        Response::ok($this->reservations->lock($slotIds, $name, $whatsapp, $plan, $crp, $publicosAtendidos, $abordagem, $request->ip(), $aceite));
     }
 
     public function confirm(Request $request): never
@@ -80,5 +81,36 @@ final class ReservationController
         }
 
         return $items === [] ? null : array_values(array_unique($items));
+    }
+
+    /** @return array<string, mixed> */
+    private function normalizeAceite(mixed $value, string $ip, ?string $userAgent): array
+    {
+        if (!is_array($value)) {
+            throw new AppException('Aceite dos termos e politica de privacidade e obrigatorio.', 422);
+        }
+
+        if (($value['aceite_termos'] ?? null) !== true || ($value['aceite_privacidade'] ?? null) !== true) {
+            throw new AppException('Aceite dos termos e politica de privacidade e obrigatorio.', 422);
+        }
+
+        $acceptedAt = Validator::requiredString($value['data_hora_aceite'] ?? null, 'aceite.data_hora_aceite', 40);
+        try {
+            $acceptedAtUtc = (new \DateTimeImmutable($acceptedAt))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+        } catch (\Throwable) {
+            throw new AppException('Data de aceite invalida.', 422);
+        }
+
+        return [
+            'aceite_termos' => true,
+            'aceite_privacidade' => true,
+            'versao_termos' => Validator::requiredString($value['versao_termos'] ?? null, 'aceite.versao_termos', 40),
+            'versao_privacidade' => Validator::requiredString($value['versao_privacidade'] ?? null, 'aceite.versao_privacidade', 40),
+            'data_hora_aceite' => $acceptedAtUtc,
+            'origem_aceite' => Validator::requiredString($value['origem_aceite'] ?? null, 'aceite.origem_aceite', 80),
+            'texto_aceite' => Validator::requiredString($value['texto_aceite'] ?? null, 'aceite.texto_aceite', 800),
+            'aceite_user_agent' => is_string($userAgent) && $userAgent !== '' ? mb_substr($userAgent, 0, 255) : null,
+            'aceite_ip' => $ip !== '' ? $ip : null,
+        ];
     }
 }
