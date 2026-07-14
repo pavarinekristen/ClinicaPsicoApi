@@ -38,6 +38,7 @@ $router = new Router(Env::get('API_BASE_PATH', '/api'));
 $router->get('/health', [new HealthController(), 'show']);
 $router->get('/rooms', static fn (Request $request) => roomController()->index($request));
 $router->get('/availability', static fn (Request $request) => availabilityController()->index($request));
+$router->get('/availability/range', static fn (Request $request) => availabilityController()->range($request));
 $router->post('/reservations/lock', static fn (Request $request) => reservationController()->lock($request));
 $router->post('/reservations/confirm', static fn (Request $request) => reservationController()->confirm($request));
 $router->post('/admin/login', static fn (Request $request) => authController()->login($request));

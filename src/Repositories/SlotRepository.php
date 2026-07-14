@@ -69,6 +69,43 @@ final class SlotRepository
         return $stmt->fetchAll();
     }
 
+    /** @return array<int, array<string, mixed>> */
+    public function slotsForRange(string $salaPublicId, string $startDate, string $endDate): array
+    {
+        $this->cleanupExpiredLocks();
+
+        $startUtc = (new \DateTimeImmutable($startDate . ' 00:00:00', new \DateTimeZone('America/Sao_Paulo')))
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+        $endUtc = (new \DateTimeImmutable($endDate . ' 00:00:00', new \DateTimeZone('America/Sao_Paulo')))
+            ->modify('+1 day')
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+
+        $stmt = $this->pdo->prepare(
+            "SELECT s.public_id AS id,
+                    DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) AS local_date,
+                    s.slot_inicio,
+                    s.slot_fim,
+                    s.status,
+                    s.locked_until,
+                    TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), s.locked_until) AS seconds_to_unlock
+             FROM agenda_slots s
+             INNER JOIN salas r ON r.id = s.sala_id
+             WHERE r.public_id = :sala_public_id
+               AND s.slot_inicio >= :start_utc
+               AND s.slot_inicio < :end_utc
+             ORDER BY s.slot_inicio"
+        );
+
+        $stmt->execute([
+            'sala_public_id' => $salaPublicId,
+            'start_utc' => $startUtc,
+            'end_utc' => $endUtc,
+        ]);
+
+        return $stmt->fetchAll();
+    }
     /** @return array<string, mixed>|null */
     public function findSlotByPublicId(string $slotPublicId): ?array
     {

@@ -67,6 +67,7 @@ Protecoes: lockout por IP de **10 tentativas / 15 min** (429) no login e nas rot
 GET  /health
 GET  /rooms
 GET  /availability?sala_id=<uuid>&date=YYYY-MM-DD
+GET  /availability/range?sala_id=<uuid>&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 POST /reservations/lock
 POST /reservations/confirm            { reserva_id, codigo }
 
@@ -94,6 +95,7 @@ Se duas pessoas clicarem ao mesmo tempo, apenas uma atualizacao afeta 1 linha; a
 ## Regra de calendario
 
 - O bloqueio acontece em `agenda_slots`; cada slot = sala + data + horario.
+- Para calendario semanal/mensal, use `/availability/range`; a API agrupa os slots por data local em `slots_by_date` e limita cada consulta a 62 dias.
 - Podem existir varios cadastros no mesmo dia, mas nunca dois ativos para a mesma sala no mesmo horario (`UNIQUE (sala_id, slot_inicio)`).
 - Quando um slot e travado, a API grava o cadastro completo em `reservas`.
 - Slots com `lock_temporario`, `confirmada` ou `bloqueada_admin` aparecem bloqueados/vermelhos.
