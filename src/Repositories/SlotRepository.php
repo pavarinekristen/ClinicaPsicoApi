@@ -49,6 +49,7 @@ final class SlotRepository
     public function slotsForDay(string $salaPublicId, string $date): array
     {
         $this->cleanupExpiredLocks();
+        [$startUtc, $endUtc] = $this->localDateRangeUtc($date, $date);
 
         $stmt = $this->pdo->prepare(
             "SELECT s.public_id AS id,
@@ -60,11 +61,16 @@ final class SlotRepository
              FROM agenda_slots s
              INNER JOIN salas r ON r.id = s.sala_id
              WHERE r.public_id = :sala_public_id
-               AND DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) = :date
+               AND s.slot_inicio >= :start_utc
+               AND s.slot_inicio < :end_utc
              ORDER BY s.slot_inicio"
         );
 
-        $stmt->execute(['sala_public_id' => $salaPublicId, 'date' => $date]);
+        $stmt->execute([
+            'sala_public_id' => $salaPublicId,
+            'start_utc' => $startUtc,
+            'end_utc' => $endUtc,
+        ]);
 
         return $stmt->fetchAll();
     }
@@ -74,14 +80,7 @@ final class SlotRepository
     {
         $this->cleanupExpiredLocks();
 
-        $startUtc = (new \DateTimeImmutable($startDate . ' 00:00:00', new \DateTimeZone('America/Sao_Paulo')))
-            ->setTimezone(new \DateTimeZone('UTC'))
-            ->format('Y-m-d H:i:s');
-        $endUtc = (new \DateTimeImmutable($endDate . ' 00:00:00', new \DateTimeZone('America/Sao_Paulo')))
-            ->modify('+1 day')
-            ->setTimezone(new \DateTimeZone('UTC'))
-            ->format('Y-m-d H:i:s');
-
+        [$startUtc, $endUtc] = $this->localDateRangeUtc($startDate, $endDate);
         $stmt = $this->pdo->prepare(
             "SELECT s.public_id AS id,
                     DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) AS local_date,
@@ -837,6 +836,7 @@ final class SlotRepository
     public function reservationsForDay(string $date): array
     {
         $this->cleanupExpiredLocks();
+        [$startUtc, $endUtc] = $this->localDateRangeUtc($date, $date);
 
         $stmt = $this->pdo->prepare(
             "SELECT r.public_id AS reserva_id,
@@ -861,12 +861,13 @@ final class SlotRepository
              INNER JOIN reserva_slots rs ON rs.reserva_id = r.id
              INNER JOIN agenda_slots s ON s.id = rs.slot_id
              INNER JOIN salas sa ON sa.id = r.sala_id
-             WHERE DATE(CONVERT_TZ(s.slot_inicio, '+00:00', '-03:00')) = :date
+             WHERE s.slot_inicio >= :start_utc
+               AND s.slot_inicio < :end_utc
                AND rs.status = 'ativa'
              GROUP BY r.id, r.public_id, r.cliente_nome, r.cliente_whatsapp, r.plano, r.cliente_crp, r.publicos_atendidos, r.abordagem_trabalho, r.status, r.payment_status, r.pix_received_at, r.created_at, sa.numero, sa.nome
              ORDER BY slot_inicio, sa.numero"
         );
-        $stmt->execute(['date' => $date]);
+        $stmt->execute(['start_utc' => $startUtc, 'end_utc' => $endUtc]);
 
         return $this->hydrateReservationRows($stmt->fetchAll());
     }
@@ -1122,6 +1123,20 @@ final class SlotRepository
         }
 
         return true;
+    }
+
+    /** @return array{0: string, 1: string} */
+    private function localDateRangeUtc(string $startDate, string $endDate): array
+    {
+        $startUtc = (new \DateTimeImmutable($startDate . ' 00:00:00', new \DateTimeZone('America/Sao_Paulo')))
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+        $endUtc = (new \DateTimeImmutable($endDate . ' 00:00:00', new \DateTimeZone('America/Sao_Paulo')))
+            ->modify('+1 day')
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+
+        return [$startUtc, $endUtc];
     }
 
     private function localMonth(string $utcDateTime): string

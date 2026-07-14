@@ -140,6 +140,8 @@ Regras: codigo errado 422 (maximo 5 tentativas por reserva, depois 429); lock ex
 006_add_reserva_slots.sql tabela de ligacao reserva -> varios horarios
 007_add_reserva_slot_status.sql status/cancelamento individual por horario
 008_add_reserva_dados_profissionais.sql dados do cadastro profissional
+009_add_payment_acceptance.sql pagamento PIX + aceite legal
+010_add_schedule_performance_indexes.sql indices para calendario/painel
 ```
 
 ## Deploy Hostinger
@@ -151,7 +153,7 @@ Regras: codigo errado 422 (maximo 5 tentativas por reserva, depois 429); lock ex
    - `APP_KEY` novo (gerado no servidor)
    - `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH`
    - `CORS_ALLOWED_ORIGINS=https://seu-dominio.com.br`
-3. Importe as migracoes `001` -> `005` na ordem e o seed `001_seed_rooms.sql`.
+3. Importe as migracoes `001` -> `010` na ordem e o seed `001_seed_rooms.sql`.
 4. Garanta HTTPS/SSL ativo.
 5. Acesse `https://seu-dominio.com/api/health`.
 
