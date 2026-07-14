@@ -79,6 +79,12 @@ switch ($command) {
         }
         foreach ($pending as $n) {
             echo "aplicando: {$n} ... ";
+            if (migrationAlreadyReflectedInSchema($pdo, $n)) {
+                $record->execute(['m' => $n]);
+                echo "ja aplicada no schema; marcada\n";
+                continue;
+            }
+
             try {
                 $pdo->exec((string) file_get_contents($migrationsDir . '/' . $n));
                 $record->execute(['m' => $n]);
@@ -95,4 +101,48 @@ switch ($command) {
     default:
         echo "Comandos: status | migrate | baseline\n";
         exit(1);
+}
+
+function migrationAlreadyReflectedInSchema(PDO $pdo, string $migration): bool
+{
+    if ($migration !== '009_add_payment_acceptance.sql') {
+        return false;
+    }
+
+    return columnsExist($pdo, 'reservas', [
+        'payment_status',
+        'pix_received_at',
+        'aceite_termos',
+        'aceite_privacidade',
+        'versao_termos',
+        'versao_privacidade',
+        'data_hora_aceite',
+        'origem_aceite',
+        'texto_aceite',
+        'aceite_user_agent',
+        'aceite_ip',
+    ]);
+}
+
+/** @param array<int, string> $columns */
+function columnsExist(PDO $pdo, string $table, array $columns): bool
+{
+    $placeholders = implode(',', array_fill(0, count($columns), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = ?
+           AND COLUMN_NAME IN ({$placeholders})"
+    );
+    $stmt->execute([$table, ...$columns]);
+
+    $found = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN));
+    foreach ($columns as $column) {
+        if (!isset($found[$column])) {
+            return false;
+        }
+    }
+
+    return true;
 }
