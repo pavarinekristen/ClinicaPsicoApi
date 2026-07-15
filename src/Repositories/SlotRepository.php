@@ -52,7 +52,8 @@ final class SlotRepository
                  s.publicos_atendidos = NULL,
                  s.abordagem_trabalho = NULL,
                  s.updated_at = UTC_TIMESTAMP()
-             WHERE s.status IN ('lock_temporario', 'confirmada')
+             WHERE s.status IN ('lock_temporario', 'confirmada', 'bloqueada_admin')
+               AND (s.status <> 'bloqueada_admin' OR s.bloqueio_motivo IS NULL OR s.bloqueio_motivo = '')
                AND NOT EXISTS (
                  SELECT 1
                  FROM reserva_slots rs
