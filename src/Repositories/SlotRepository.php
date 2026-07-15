@@ -646,22 +646,23 @@ final class SlotRepository
             $reservationSlotsStmt->execute(['reserva_id' => $reservation['id']]);
 
             $slotStmt = $this->pdo->prepare(
-                "UPDATE agenda_slots
-             SET status = 'livre',
-                     lock_token = NULL,
-                     locked_until = NULL,
-                     confirmed_at = NULL,
-                     cliente_nome = NULL,
-                     cliente_whatsapp = NULL,
-                     plano = NULL,
-                     cliente_crp = NULL,
-                     publicos_atendidos = NULL,
-                     abordagem_trabalho = NULL,
-                     updated_at = UTC_TIMESTAMP()
-                 WHERE lock_token = :lock_token
-                   AND status IN ('lock_temporario', 'confirmada')"
+                "UPDATE agenda_slots s
+                 INNER JOIN reserva_slots rs ON rs.slot_id = s.id
+                 SET s.status = 'livre',
+                     s.lock_token = NULL,
+                     s.locked_until = NULL,
+                     s.confirmed_at = NULL,
+                     s.cliente_nome = NULL,
+                     s.cliente_whatsapp = NULL,
+                     s.plano = NULL,
+                     s.cliente_crp = NULL,
+                     s.publicos_atendidos = NULL,
+                     s.abordagem_trabalho = NULL,
+                     s.updated_at = UTC_TIMESTAMP()
+                 WHERE rs.reserva_id = :reserva_id
+                   AND s.status IN ('lock_temporario', 'confirmada')"
             );
-            $slotStmt->execute(['lock_token' => $reservation['lock_token']]);
+            $slotStmt->execute(['reserva_id' => $reservation['id']]);
 
             $this->pdo->commit();
 
@@ -1300,7 +1301,7 @@ final class SlotRepository
     }
 
     /**
-     * Exclui do historico os cadastros informados (nunca os pendentes/ativos).
+     * Exclui do historico os cadastros informados e libera os horarios vinculados.
      * @param array<int, string> $ids
      */
     public function deleteReservationsByPublicIds(array $ids): int
@@ -1311,17 +1312,79 @@ final class SlotRepository
         }
 
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $stmt = $this->pdo->prepare(
-            "DELETE FROM reservas WHERE public_id IN ({$placeholders}) AND status <> 'lock_temporario'"
-        );
-        $stmt->execute($ids);
 
-        return $stmt->rowCount();
+        $this->pdo->beginTransaction();
+
+        try {
+            $releaseStmt = $this->pdo->prepare(
+                "UPDATE agenda_slots s
+                 INNER JOIN reserva_slots rs ON rs.slot_id = s.id
+                 INNER JOIN reservas r ON r.id = rs.reserva_id
+                 SET s.status = 'livre',
+                     s.lock_token = NULL,
+                     s.locked_until = NULL,
+                     s.confirmed_at = NULL,
+                     s.cliente_nome = NULL,
+                     s.cliente_whatsapp = NULL,
+                     s.plano = NULL,
+                     s.cliente_crp = NULL,
+                     s.publicos_atendidos = NULL,
+                     s.abordagem_trabalho = NULL,
+                     s.updated_at = UTC_TIMESTAMP()
+                 WHERE r.public_id IN ({$placeholders})
+                   AND r.status <> 'lock_temporario'
+                   AND s.status IN ('lock_temporario', 'confirmada')"
+            );
+            $releaseStmt->execute($ids);
+
+            $stmt = $this->pdo->prepare(
+                "DELETE FROM reservas WHERE public_id IN ({$placeholders}) AND status <> 'lock_temporario'"
+            );
+            $stmt->execute($ids);
+            $deleted = $stmt->rowCount();
+
+            $this->pdo->commit();
+
+            return $deleted;
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
     }
 
     /** Limpa todo o historico (cadastros finalizados). Preserva os pendentes/ativos. */
     public function deleteAllHistory(): int
     {
-        return (int) $this->pdo->exec("DELETE FROM reservas WHERE status <> 'lock_temporario'");
+        $this->pdo->beginTransaction();
+
+        try {
+            $this->pdo->exec(
+                "UPDATE agenda_slots s
+                 INNER JOIN reserva_slots rs ON rs.slot_id = s.id
+                 INNER JOIN reservas r ON r.id = rs.reserva_id
+                 SET s.status = 'livre',
+                     s.lock_token = NULL,
+                     s.locked_until = NULL,
+                     s.confirmed_at = NULL,
+                     s.cliente_nome = NULL,
+                     s.cliente_whatsapp = NULL,
+                     s.plano = NULL,
+                     s.cliente_crp = NULL,
+                     s.publicos_atendidos = NULL,
+                     s.abordagem_trabalho = NULL,
+                     s.updated_at = UTC_TIMESTAMP()
+                 WHERE r.status <> 'lock_temporario'
+                   AND s.status IN ('lock_temporario', 'confirmada')"
+            );
+
+            $deleted = (int) $this->pdo->exec("DELETE FROM reservas WHERE status <> 'lock_temporario'");
+
+            $this->pdo->commit();
+
+            return $deleted;
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
     }
 }
