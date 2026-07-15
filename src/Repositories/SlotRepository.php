@@ -12,7 +12,7 @@ final class SlotRepository
     {
     }
 
-    /** @return array{expired_reservations: int, released_slots: int} */
+    /** @return array{expired_reservations: int, released_slots: int, released_orphan_slots: int} */
     public function cleanupExpiredLocks(): array
     {
         $expiredReservations = (int) $this->pdo->exec(
@@ -39,9 +39,34 @@ final class SlotRepository
                AND locked_until <= UTC_TIMESTAMP()"
         );
 
+        $releasedOrphanSlots = (int) $this->pdo->exec(
+            "UPDATE agenda_slots s
+             SET s.status = 'livre',
+                 s.lock_token = NULL,
+                 s.locked_until = NULL,
+                 s.confirmed_at = NULL,
+                 s.cliente_nome = NULL,
+                 s.cliente_whatsapp = NULL,
+                 s.plano = NULL,
+                 s.cliente_crp = NULL,
+                 s.publicos_atendidos = NULL,
+                 s.abordagem_trabalho = NULL,
+                 s.updated_at = UTC_TIMESTAMP()
+             WHERE s.status IN ('lock_temporario', 'confirmada')
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM reserva_slots rs
+                 INNER JOIN reservas r ON r.id = rs.reserva_id
+                 WHERE rs.slot_id = s.id
+                   AND rs.status = 'ativa'
+                   AND r.status IN ('lock_temporario', 'confirmada')
+               )"
+        );
+
         return [
             'expired_reservations' => $expiredReservations,
             'released_slots' => $releasedSlots,
+            'released_orphan_slots' => $releasedOrphanSlots,
         ];
     }
 
