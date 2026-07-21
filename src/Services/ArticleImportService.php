@@ -38,7 +38,7 @@ final class ArticleImportService
     ) {
     }
 
-    /** @return array{run_id: string, sources_checked: int, items_found: int, imported: int, skipped: int, featured: int} */
+    /** @return array{run_id: string, sources_checked: int, items_found: int, imported: int, skipped: int, featured: int, source_errors: array<int, array{source: string, url: string, error: string}>} */
     public function import(): array
     {
         $runId = $this->articles->startImportRun();
@@ -48,6 +48,7 @@ final class ArticleImportService
         $imported = 0;
         $skipped = 0;
         $featured = 0;
+        $sourceErrors = [];
 
         try {
             foreach ($sources as $source) {
@@ -84,6 +85,11 @@ final class ArticleImportService
                     }
                 } catch (Throwable $exception) {
                     $skipped++;
+                    $sourceErrors[] = [
+                        'source' => (string) ($source['name'] ?? ''),
+                        'url' => (string) ($source['url'] ?? ''),
+                        'error' => $exception->getMessage(),
+                    ];
                     $this->log(sprintf('source=%s error=%s', (string) ($source['url'] ?? ''), $exception->getMessage()));
                 } finally {
                     $this->articles->reconnect();
@@ -103,6 +109,7 @@ final class ArticleImportService
                 'imported' => $imported,
                 'skipped' => $skipped,
                 'featured' => $featured,
+                'source_errors' => $sourceErrors,
             ];
         } catch (Throwable $exception) {
             $this->articles->reconnect();
