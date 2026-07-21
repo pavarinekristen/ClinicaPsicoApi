@@ -7,6 +7,7 @@ namespace App\Repositories;
 use App\Core\AppException;
 use PDO;
 use PDOException;
+use Throwable;
 
 final class ArticleRepository
 {
@@ -17,15 +18,27 @@ final class ArticleRepository
     }
 
     /** @return array<int, array<string, mixed>> */
-    public function published(): array
+    public function published(bool $featuredOnly = false, int $limit = 60): array
     {
-        $stmt = $this->pdo->query(
+        $where = "a.status = 'published'";
+        if ($featuredOnly) {
+            $where .= ' AND a.is_featured = 1';
+        }
+
+        $order = $featuredOnly
+            ? 'a.featured_date DESC, a.published_at DESC, a.created_at DESC'
+            : 'a.published_at DESC, a.created_at DESC';
+
+        $stmt = $this->pdo->prepare(
             "SELECT a.*, s.name AS joined_source_name
              FROM articles a
              LEFT JOIN article_sources s ON s.id = a.source_id
-             WHERE a.status = 'published'
-             ORDER BY a.published_at DESC, a.created_at DESC"
+             WHERE {$where}
+             ORDER BY {$order}
+             LIMIT :limit"
         );
+        $stmt->bindValue('limit', max(1, min(60, $limit)), PDO::PARAM_INT);
+        $stmt->execute();
 
         return array_map(fn (array $row): array => $this->mapArticle($row), $stmt->fetchAll());
     }
@@ -78,9 +91,7 @@ final class ArticleRepository
     /** @return array<int, array<string, mixed>> */
     public function sources(): array
     {
-        $stmt = $this->pdo->query(
-            'SELECT * FROM article_sources ORDER BY active DESC, created_at DESC'
-        );
+        $stmt = $this->pdo->query('SELECT * FROM article_sources ORDER BY active DESC, created_at DESC');
 
         return array_map(fn (array $row): array => $this->mapSource($row), $stmt->fetchAll());
     }
@@ -88,9 +99,7 @@ final class ArticleRepository
     /** @return array<int, array<string, mixed>> */
     public function activeSources(): array
     {
-        $stmt = $this->pdo->query(
-            'SELECT * FROM article_sources WHERE active = 1 ORDER BY created_at DESC'
-        );
+        $stmt = $this->pdo->query('SELECT * FROM article_sources WHERE active = 1 ORDER BY created_at DESC');
 
         return array_map(fn (array $row): array => $this->mapSource($row), $stmt->fetchAll());
     }
@@ -158,7 +167,8 @@ final class ArticleRepository
         ?string $imageUrl,
         string $category,
         array $tags,
-        ?string $externalPublishedAt
+        ?string $externalPublishedAt,
+        string $status = 'pending_review'
     ): ?array {
         $sourceId = $this->internalSourceId($sourcePublicId);
         if ($sourceId === null) {
@@ -166,14 +176,16 @@ final class ArticleRepository
         }
 
         $publicId = $this->publicId();
-        $content = $summary . "\n\nLeia o conteúdo completo na fonte original.";
+        $content = $summary . "\n\nLeia o conteudo completo na fonte original.";
+        $status = in_array($status, ['pending_review', 'published'], true) ? $status : 'pending_review';
+        $now = gmdate('Y-m-d H:i:s');
 
         try {
             $stmt = $this->pdo->prepare(
                 "INSERT INTO articles
-                   (public_id, title, slug, summary, content, category, tags, origin, status, source_id, source_name, source_url, image_url, external_published_at, reading_minutes, is_indexable)
+                   (public_id, title, slug, summary, content, category, tags, origin, status, source_id, source_name, source_url, image_url, external_published_at, published_at, imported_at, source_excerpt, reading_minutes, is_indexable)
                  SELECT
-                   :public_id, :title, :slug, :summary, :content, :category, :tags, 'external_curated', 'pending_review', s.id, s.name, :source_url, :image_url, :external_published_at, 2, 0
+                   :public_id, :title, :slug, :summary, :content, :category, :tags, 'external_curated', :status, s.id, s.name, :source_url, :image_url, :external_published_at, :published_at, :imported_at, :source_excerpt, 2, 0
                  FROM article_sources s
                  WHERE s.id = :source_id"
             );
@@ -188,7 +200,11 @@ final class ArticleRepository
                 'source_url' => $sourceUrl,
                 'image_url' => $imageUrl,
                 'external_published_at' => $externalPublishedAt,
+                'published_at' => $status === 'published' ? $now : null,
+                'imported_at' => $now,
+                'source_excerpt' => $summary,
                 'source_id' => $sourceId,
+                'status' => $status,
             ]);
         } catch (PDOException $exception) {
             if ($exception->getCode() === '23000') {
@@ -204,6 +220,94 @@ final class ArticleRepository
     {
         $stmt = $this->pdo->prepare('UPDATE article_sources SET last_checked_at = UTC_TIMESTAMP() WHERE public_id = :id');
         $stmt->execute(['id' => $sourcePublicId]);
+    }
+
+    public function startImportRun(): string
+    {
+        $publicId = $this->publicId();
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO article_import_runs (public_id, started_at, status)
+             VALUES (:public_id, UTC_TIMESTAMP(), 'running')"
+        );
+        $stmt->execute(['public_id' => $publicId]);
+
+        return $publicId;
+    }
+
+    public function finishImportRun(
+        string $publicId,
+        string $status,
+        int $sourcesChecked,
+        int $itemsFound,
+        int $itemsImported,
+        int $itemsSkipped,
+        int $itemsFeatured,
+        ?string $errorMessage = null
+    ): void {
+        $stmt = $this->pdo->prepare(
+            "UPDATE article_import_runs
+             SET finished_at = UTC_TIMESTAMP(),
+                 status = :status,
+                 sources_checked = :sources_checked,
+                 items_found = :items_found,
+                 items_imported = :items_imported,
+                 items_skipped = :items_skipped,
+                 items_featured = :items_featured,
+                 error_message = :error_message
+             WHERE public_id = :public_id"
+        );
+        $stmt->execute([
+            'public_id' => $publicId,
+            'status' => $status,
+            'sources_checked' => $sourcesChecked,
+            'items_found' => $itemsFound,
+            'items_imported' => $itemsImported,
+            'items_skipped' => $itemsSkipped,
+            'items_featured' => $itemsFeatured,
+            'error_message' => $errorMessage,
+        ]);
+    }
+
+    public function refreshDailyFeatured(int $limit = 6): int
+    {
+        $limit = max(1, min(12, $limit));
+        $today = date('Y-m-d');
+
+        $this->pdo->beginTransaction();
+        try {
+            $this->pdo->exec('UPDATE articles SET is_featured = 0 WHERE is_featured = 1');
+
+            $stmt = $this->pdo->prepare(
+                "SELECT public_id
+                 FROM articles
+                 WHERE status = 'published'
+                 ORDER BY COALESCE(imported_at, published_at, created_at) DESC, created_at DESC
+                 LIMIT :limit"
+            );
+            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+            $stmt->execute();
+            $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            if ($ids === []) {
+                $this->pdo->commit();
+                return 0;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $update = $this->pdo->prepare(
+                "UPDATE articles
+                 SET is_featured = 1,
+                     featured_date = ?
+                 WHERE public_id IN ({$placeholders})"
+            );
+            $update->execute([$today, ...$ids]);
+            $this->pdo->commit();
+
+            return count($ids);
+        } catch (Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
     }
 
     /** @return array<string, mixed> */
@@ -343,6 +447,8 @@ final class ArticleRepository
             'publishedAt' => $this->dateOnly($row['published_at'] ?? $row['created_at'] ?? null),
             'readingMinutes' => (int) $row['reading_minutes'],
             'isIndexable' => (bool) $row['is_indexable'],
+            'isFeatured' => (bool) ($row['is_featured'] ?? false),
+            'featuredDate' => $row['featured_date'] ?? null,
         ];
     }
 

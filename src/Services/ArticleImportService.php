@@ -13,18 +13,14 @@ final class ArticleImportService
     private const DEFAULT_TERMS = [
         'psicologia',
         'saude mental',
-        'saúde mental',
         'terapia',
         'ansiedade',
         'depressao',
-        'depressão',
         'bem-estar',
         'neurodesenvolvimento',
         'saude digital',
-        'saúde digital',
         'tecnologia',
         'inteligencia artificial',
-        'inteligência artificial',
         'ia',
     ];
 
@@ -34,49 +30,82 @@ final class ArticleImportService
     ) {
     }
 
-    /** @return array{imported: int, skipped: int} */
+    /** @return array{run_id: string, sources_checked: int, items_found: int, imported: int, skipped: int, featured: int} */
     public function import(): array
     {
+        $runId = $this->articles->startImportRun();
+        $sources = $this->articles->activeSources();
+        $sourcesChecked = 0;
+        $itemsFound = 0;
         $imported = 0;
         $skipped = 0;
+        $featured = 0;
 
-        foreach ($this->articles->activeSources() as $source) {
-            try {
-                $items = $this->itemsForSource($source);
-                $topics = $this->topics($source);
+        try {
+            foreach ($sources as $source) {
+                $sourcesChecked++;
+                try {
+                    $items = $this->itemsForSource($source);
+                    $itemsFound += count($items);
+                    $topics = $this->topics($source);
 
-                foreach ($items as $item) {
-                    if (!$this->isRelevant($item, $topics)) {
-                        $skipped++;
-                        continue;
+                    foreach ($items as $item) {
+                        if (!$this->isRelevant($item, $topics)) {
+                            $skipped++;
+                            continue;
+                        }
+
+                        $created = $this->articles->insertExternalCandidate(
+                            (string) $source['id'],
+                            $item['title'],
+                            $this->limit($item['summary'], 700),
+                            $item['url'],
+                            $item['imageUrl'],
+                            $this->category($item, $topics),
+                            $this->matchedTags($item, $topics),
+                            $item['publishedAt'],
+                            'published'
+                        );
+
+                        if ($created === null) {
+                            $skipped++;
+                        } else {
+                            $imported++;
+                        }
                     }
-
-                    $created = $this->articles->insertExternalCandidate(
-                        (string) $source['id'],
-                        $item['title'],
-                        $this->limit($item['summary'], 700),
-                        $item['url'],
-                        $item['imageUrl'],
-                        $this->category($item, $topics),
-                        $this->matchedTags($item, $topics),
-                        $item['publishedAt']
-                    );
-
-                    if ($created === null) {
-                        $skipped++;
-                    } else {
-                        $imported++;
-                    }
+                } catch (Throwable $exception) {
+                    $skipped++;
+                    $this->log(sprintf('source=%s error=%s', (string) ($source['url'] ?? ''), $exception->getMessage()));
+                } finally {
+                    $this->articles->markSourceChecked((string) $source['id']);
                 }
-            } catch (Throwable $exception) {
-                $skipped++;
-                $this->log(sprintf('source=%s error=%s', (string) ($source['url'] ?? ''), $exception->getMessage()));
-            } finally {
-                $this->articles->markSourceChecked((string) $source['id']);
             }
-        }
 
-        return ['imported' => $imported, 'skipped' => $skipped];
+            $featured = $this->articles->refreshDailyFeatured(6);
+            $this->articles->finishImportRun($runId, 'completed', $sourcesChecked, $itemsFound, $imported, $skipped, $featured);
+
+            return [
+                'run_id' => $runId,
+                'sources_checked' => $sourcesChecked,
+                'items_found' => $itemsFound,
+                'imported' => $imported,
+                'skipped' => $skipped,
+                'featured' => $featured,
+            ];
+        } catch (Throwable $exception) {
+            $this->articles->finishImportRun(
+                $runId,
+                'failed',
+                $sourcesChecked,
+                $itemsFound,
+                $imported,
+                $skipped,
+                $featured,
+                mb_substr($exception->getMessage(), 0, 500)
+            );
+
+            throw $exception;
+        }
     }
 
     /** @param array<string, mixed> $source @return array<int, array{title: string, summary: string, url: string, imageUrl: ?string, publishedAt: ?string}> */
@@ -125,8 +154,8 @@ final class ArticleImportService
             }
 
             $items[] = [
-                'title' => $title,
-                'summary' => $summary !== '' ? $summary : $title,
+                'title' => $this->decode($title),
+                'summary' => $summary !== '' ? $this->decode($summary) : $this->decode($title),
                 'url' => $url,
                 'imageUrl' => $this->rssImage($item),
                 'publishedAt' => $this->dateOrNull((string) ($item->pubDate ?? '')),
@@ -151,8 +180,8 @@ final class ArticleImportService
             }
 
             $items[] = [
-                'title' => $title,
-                'summary' => $summary !== '' ? $summary : $title,
+                'title' => $this->decode($title),
+                'summary' => $summary !== '' ? $this->decode($summary) : $this->decode($title),
                 'url' => $url,
                 'imageUrl' => null,
                 'publishedAt' => $this->dateOrNull((string) ($entry->updated ?? $entry->published ?? '')),
@@ -188,8 +217,8 @@ final class ArticleImportService
             }
 
             $items[] = [
-                'title' => $title,
-                'summary' => $summary,
+                'title' => $this->decode($title),
+                'summary' => $this->decode($summary),
                 'url' => $url,
                 'imageUrl' => is_string($row['urlToImage'] ?? $row['image'] ?? null) ? (string) ($row['urlToImage'] ?? $row['image']) : null,
                 'publishedAt' => $this->dateOrNull((string) ($row['publishedAt'] ?? $row['published_at'] ?? '')),
@@ -325,7 +354,7 @@ final class ArticleImportService
     private function limit(string $value, int $max): string
     {
         $value = trim(preg_replace('/\s+/', ' ', $value) ?? $value);
-        return mb_strlen($value) > $max ? mb_substr($value, 0, $max - 1) . '…' : $value;
+        return mb_strlen($value) > $max ? mb_substr($value, 0, $max - 3) . '...' : $value;
     }
 
     private function decode(string $value): string
