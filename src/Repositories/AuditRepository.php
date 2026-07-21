@@ -12,8 +12,19 @@ use PDO;
  */
 final class AuditRepository
 {
-    public function __construct(private readonly PDO $pdo)
+    /** @var callable|null */
+    private $connect;
+
+    public function __construct(private PDO $pdo, ?callable $connect = null)
     {
+        $this->connect = $connect;
+    }
+
+    public function reconnect(): void
+    {
+        if ($this->connect !== null) {
+            $this->pdo = ($this->connect)();
+        }
     }
 
     /** @param array<string, mixed> $meta */

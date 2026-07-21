@@ -167,7 +167,7 @@ function auditRepository(): AuditRepository
     static $repository = null;
 
     if ($repository === null) {
-        $repository = new AuditRepository(Database::connect());
+        $repository = new AuditRepository(Database::connect(), static fn () => Database::connect());
     }
 
     return $repository;

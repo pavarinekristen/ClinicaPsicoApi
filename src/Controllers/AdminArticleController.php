@@ -105,9 +105,15 @@ final class AdminArticleController
         $user = $this->authorize($request);
         try {
             $result = $this->importer->import();
-            $this->audit->record($user, 'importacao_artigos_externos', 'article', null, $result, $request->ip());
         } catch (Throwable $exception) {
             Response::error('Falha ao importar artigos: ' . $exception->getMessage(), 500);
+        }
+
+        try {
+            $this->audit->reconnect();
+            $this->audit->record($user, 'importacao_artigos_externos', 'article', null, $result, $request->ip());
+        } catch (Throwable $exception) {
+            @error_log('[' . gmdate('c') . '] article import audit failed: ' . $exception->getMessage() . "\n");
         }
 
         Response::ok($result);
