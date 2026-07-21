@@ -13,6 +13,7 @@ use App\Repositories\ArticleRepository;
 use App\Repositories\AuditRepository;
 use App\Services\ArticleImportService;
 use App\Services\AuthService;
+use Throwable;
 
 final class AdminArticleController
 {
@@ -102,8 +103,12 @@ final class AdminArticleController
     public function import(Request $request): never
     {
         $user = $this->authorize($request);
-        $result = $this->importer->import();
-        $this->audit->record($user, 'importacao_artigos_externos', 'article', null, $result, $request->ip());
+        try {
+            $result = $this->importer->import();
+            $this->audit->record($user, 'importacao_artigos_externos', 'article', null, $result, $request->ip());
+        } catch (Throwable $exception) {
+            Response::error('Falha ao importar artigos: ' . $exception->getMessage(), 500);
+        }
 
         Response::ok($result);
     }
