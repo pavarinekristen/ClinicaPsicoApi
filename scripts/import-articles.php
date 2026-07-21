@@ -18,7 +18,7 @@ Env::load(dirname(__DIR__) . '/.env');
 date_default_timezone_set(Env::get('APP_TIMEZONE', 'America/Sao_Paulo'));
 
 try {
-    $repository = new ArticleRepository(Database::connect());
+    $repository = new ArticleRepository(Database::connect(), static fn () => Database::connect());
     $service = new ArticleImportService($repository, dirname(__DIR__) . '/storage/logs/article-import.log');
     $result = $service->import();
 

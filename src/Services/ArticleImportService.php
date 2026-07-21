@@ -54,6 +54,7 @@ final class ArticleImportService
                 $sourcesChecked++;
                 try {
                     $items = $this->itemsForSource($source);
+                    $this->articles->reconnect();
                     $itemsFound += count($items);
                     $topics = $this->topics($source);
 
@@ -85,11 +86,14 @@ final class ArticleImportService
                     $skipped++;
                     $this->log(sprintf('source=%s error=%s', (string) ($source['url'] ?? ''), $exception->getMessage()));
                 } finally {
+                    $this->articles->reconnect();
                     $this->articles->markSourceChecked((string) $source['id']);
                 }
             }
 
+            $this->articles->reconnect();
             $featured = $this->articles->refreshDailyFeatured(6);
+            $this->articles->reconnect();
             $this->articles->finishImportRun($runId, 'completed', $sourcesChecked, $itemsFound, $imported, $skipped, $featured);
 
             return [
@@ -101,6 +105,7 @@ final class ArticleImportService
                 'featured' => $featured,
             ];
         } catch (Throwable $exception) {
+            $this->articles->reconnect();
             $this->articles->finishImportRun(
                 $runId,
                 'failed',

@@ -12,9 +12,19 @@ use Throwable;
 final class ArticleRepository
 {
     private const FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80';
+    /** @var callable|null */
+    private $connect;
 
-    public function __construct(private readonly PDO $pdo)
+    public function __construct(private PDO $pdo, ?callable $connect = null)
     {
+        $this->connect = $connect;
+    }
+
+    public function reconnect(): void
+    {
+        if ($this->connect !== null) {
+            $this->pdo = ($this->connect)();
+        }
     }
 
     /** @return array<int, array<string, mixed>> */

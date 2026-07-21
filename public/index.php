@@ -123,7 +123,7 @@ function articleRepository(): ArticleRepository
 {
     static $repository = null;
     if ($repository === null) {
-        $repository = new ArticleRepository(Database::connect());
+        $repository = new ArticleRepository(Database::connect(), static fn () => Database::connect());
     }
     return $repository;
 }
