@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Controllers\AdminArticleController;
 use App\Controllers\AdminController;
+use App\Controllers\ArticleController;
 use App\Controllers\AuthController;
 use App\Controllers\AvailabilityController;
 use App\Controllers\HealthController;
@@ -15,10 +17,12 @@ use App\Core\Request;
 use App\Core\Response;
 use App\Core\Router;
 use App\Repositories\AuditRepository;
+use App\Repositories\ArticleRepository;
 use App\Repositories\RoomRepository;
 use App\Repositories\SlotRepository;
 use App\Services\AuthService;
 use App\Services\AvailabilityService;
+use App\Services\ArticleImportService;
 use App\Services\ReservationService;
 
 require_once __DIR__ . '/../src/Core/autoload.php';
@@ -36,6 +40,8 @@ if ($request->method() === 'OPTIONS') {
 $router = new Router(Env::get('API_BASE_PATH', '/api'));
 
 $router->get('/health', [new HealthController(), 'show']);
+$router->get('/articles', static fn (Request $request) => articleController()->index($request));
+$router->get('/articles/show', static fn (Request $request) => articleController()->show($request));
 $router->get('/rooms', static fn (Request $request) => roomController()->index($request));
 $router->get('/availability', static fn (Request $request) => availabilityController()->index($request));
 $router->get('/availability/range', static fn (Request $request) => availabilityController()->range($request));
@@ -56,6 +62,12 @@ $router->post('/admin/reservations/cancel-slot', static fn (Request $request) =>
 $router->post('/admin/reservations/update', static fn (Request $request) => adminController()->updateReservation($request));
 $router->post('/admin/slots/block', static fn (Request $request) => adminController()->blockSlot($request));
 $router->post('/admin/slots/unblock', static fn (Request $request) => adminController()->unblockSlot($request));
+$router->get('/admin/articles', static fn (Request $request) => adminArticleController()->index($request));
+$router->post('/admin/articles', static fn (Request $request) => adminArticleController()->create($request));
+$router->post('/admin/articles/approve', static fn (Request $request) => adminArticleController()->approve($request));
+$router->post('/admin/articles/reject', static fn (Request $request) => adminArticleController()->reject($request));
+$router->post('/admin/article-sources', static fn (Request $request) => adminArticleController()->createSource($request));
+$router->post('/admin/articles/import', static fn (Request $request) => adminArticleController()->import($request));
 
 try {
     $router->dispatch($request);
@@ -105,6 +117,15 @@ function roomController(): RoomController
     }
 
     return $controller;
+}
+
+function articleRepository(): ArticleRepository
+{
+    static $repository = null;
+    if ($repository === null) {
+        $repository = new ArticleRepository(Database::connect());
+    }
+    return $repository;
 }
 
 function availabilityController(): AvailabilityController
@@ -163,6 +184,17 @@ function authController(): AuthController
     return $controller;
 }
 
+function articleController(): ArticleController
+{
+    static $controller = null;
+
+    if ($controller === null) {
+        $controller = new ArticleController(articleRepository());
+    }
+
+    return $controller;
+}
+
 function adminController(): AdminController
 {
     static $controller = null;
@@ -170,6 +202,18 @@ function adminController(): AdminController
     if ($controller === null) {
         $service = new ReservationService(slotRepository(), (int) Env::get('LOCK_TTL_MINUTES', '10'));
         $controller = new AdminController($service, authService(), auditRepository());
+    }
+
+    return $controller;
+}
+
+function adminArticleController(): AdminArticleController
+{
+    static $controller = null;
+
+    if ($controller === null) {
+        $importer = new ArticleImportService(articleRepository(), dirname(__DIR__) . '/storage/logs/article-import.log');
+        $controller = new AdminArticleController(articleRepository(), $importer, authService(), auditRepository());
     }
 
     return $controller;
