@@ -17,11 +17,19 @@ final class ArticleImportService
         'ansiedade',
         'depressao',
         'bem-estar',
+        'bem estar',
+        'bons habitos',
+        'habitos saudaveis',
+        'habitos alimentares',
+        'alimentacao',
+        'nutricao',
+        'sono',
+        'descanso',
+        'autocuidado',
+        'qualidade de vida',
+        'rotina saudavel',
+        'saude emocional',
         'neurodesenvolvimento',
-        'saude digital',
-        'tecnologia',
-        'inteligencia artificial',
-        'ia',
     ];
 
     public function __construct(
@@ -58,7 +66,7 @@ final class ArticleImportService
                         $created = $this->articles->insertExternalCandidate(
                             (string) $source['id'],
                             $item['title'],
-                            $this->limit($item['summary'], 700),
+                            $this->limit($item['summary'], 1000),
                             $item['url'],
                             $item['imageUrl'],
                             $this->category($item, $topics),
